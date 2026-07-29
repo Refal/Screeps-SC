@@ -142,7 +142,7 @@ function loadOptions() {
             });
         }
     }
-    xhr.open("GET", chrome.extension.getURL('settings.json'), true);
+    xhr.open("GET", chrome.runtime.getURL('settings.json'), true);
     xhr.send();
 }
 

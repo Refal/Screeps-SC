@@ -1,80 +1,59 @@
 var activeTabPorts = {}
 var injectQueue = []
 
-chrome.runtime.getPackageDirectoryEntry(function (dirEntry) {
-    dirEntry.getFile("settings.json", undefined, function (fileEntry) {
-    fileEntry.file(function (file) {
-            var reader = new FileReader()
-            reader.addEventListener("load", function (event) {
-                var settings = JSON.parse(reader.result);
+// The service worker is restarted on demand, so this runs on every startup
+// and keeps the module registrations in storage up to date.
+fetch(chrome.runtime.getURL("settings.json"))
+    .then(function (response) { return response.json(); })
+    .then(function (settings) {
+        if (settings.modules.length){
+            var onUpdateArr = [];
+            var onCompletedArr = [];
 
-                if (settings.modules.length){
-                    var onUpdateArr = [];
-                    var onCompletedArr = [];
+            for (var i = 0, len = settings.modules.length; i < len; i++) {
+                var module = settings.modules[i];
 
-                    for (var i = 0, len = settings.modules.length; i < len; i++) {
-                        var module = settings.modules[i];
-
-                        if (!module.path){
-                            console.error("module at index["+i+"] is missing path.");
-                            break;
-                        }
-
-                        if (!module.runAt || !Object.keys(module.runAt).length){
-                            console.error("module at index["+i+"] is missing runAt.");
-                            break;
-                        }
-
-                        if (module.runAt.onUpdate){
-                            onUpdateArr.push({path: module.path, url: module.runAt.onUpdate});
-                        }
-
-                        if (module.runAt.onCompleted){
-                            onCompletedArr.push({path: module.path, url: module.runAt.onCompleted});
-                        }
-                    }
-
-                    chrome.storage.local.set({onUpdateArr: onUpdateArr, onCompletedArr: onCompletedArr}, function() {
-                      if(chrome.runtime.lastError) {
-                        console.error(
-                          "Error setting " + key + " to " + JSON.stringify(data) +
-                          ": " + chrome.runtime.lastError.message
-                        );
-                      }
-                    });
-
-                }else{
-                    console.error("modules is missing in settings.json");
+                if (!module.path){
+                    console.error("module at index["+i+"] is missing path.");
+                    break;
                 }
+
+                if (!module.runAt || !Object.keys(module.runAt).length){
+                    console.error("module at index["+i+"] is missing runAt.");
+                    break;
+                }
+
+                if (module.runAt.onUpdate){
+                    onUpdateArr.push({path: module.path, url: module.runAt.onUpdate});
+                }
+
+                if (module.runAt.onCompleted){
+                    onCompletedArr.push({path: module.path, url: module.runAt.onCompleted});
+                }
+            }
+
+            chrome.storage.local.set({onUpdateArr: onUpdateArr, onCompletedArr: onCompletedArr}, function() {
+              if(chrome.runtime.lastError) {
+                console.error("Error storing module registrations: " + chrome.runtime.lastError.message);
+              }
             });
-            reader.readAsText(file);
-        });
-    }, function (e) {
+
+        }else{
+            console.error("modules is missing in settings.json");
+        }
+    })
+    .catch(function (e) {
         console.error(e);
     });
-});
 
-chrome.browserAction.onClicked.addListener(function(tab) {
+chrome.action.onClicked.addListener(function(tab) {
     //chrome.tabs.create({"url": "https://screeps.com/a/#!/map"});
     chrome.runtime.openOptionsPage();
 });
 
 chrome.tabs.onUpdated.addListener(function(tabId, changeInfo, tab) {
     if (changeInfo.status == "complete"){
-        if (tab.url.startsWith("https://screeps.com/a/#!/")){
-            /*
-            var script = `data = {auth: JSON.parse(localStorage.getItem('auth')),
-                          userid: JSON.parse(localStorage.getItem('users.code.activeWorld'))[0]._id}; data;`
-
-            chrome.tabs.executeScript(tabId, {code: script}, function(dataArr){
-                console.log(dataArr);
-            });
-            */
-
-            if (!activeTabPorts[tabId]){
-                activeTabPorts[tabId] = {}
-            }
-
+        if (tab.url && tab.url.startsWith("https://screeps.com/a/#!/")){
 
             chrome.storage.local.get("onUpdateArr", function(data) {
                 if (data.onUpdateArr){
@@ -98,6 +77,10 @@ chrome.tabs.onUpdated.addListener(function(tabId, changeInfo, tab) {
 });
 
 chrome.webRequest.onCompleted.addListener(function(details) {
+    if (details.tabId < 0){
+        return;
+    }
+
     chrome.storage.local.get("onCompletedArr", function(data) {
         if (data.onCompletedArr){
             data.onCompletedArr.forEach(function(info){
@@ -119,21 +102,24 @@ chrome.webRequest.onCompleted.addListener(function(details) {
 
 chrome.runtime.onMessage.addListener(function(request, sender, callback) {
     if (request.action == "xhttp") {
-        var xhttp = new XMLHttpRequest();
         var method = request.method ? request.method.toUpperCase() : 'GET';
+        var options = {method: method};
 
-        xhttp.onload = function() {
-            callback(xhttp.responseText);
-        };
-        xhttp.onerror = function() {
-            console.error("Error in xhttp: " + xhttp.responseText);
-            callback();
-        };
-        xhttp.open(method, request.url, true);
         if (method == 'POST') {
-            xhttp.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+            options.headers = {'Content-Type': 'application/x-www-form-urlencoded'};
+            options.body = request.data;
         }
-        xhttp.send(request.data);
+
+        fetch(request.url, options)
+            .then(function(response) { return response.text(); })
+            .then(function(responseText) {
+                callback(responseText);
+            })
+            .catch(function(e) {
+                console.error("Error in xhttp: " + e);
+                callback();
+            });
+
         return true; // prevents the callback from being called too early on return
     } else if (request.action == "injected"){
         injectQueue = injectQueue.filter(item => item !== request.data);
@@ -153,6 +139,10 @@ function getStorageSync(path, cb){
 }
 
 function executeModule(tabId, info, config, tries = 15){
+    if (!activeTabPorts[tabId]){
+        activeTabPorts[tabId] = {}
+    }
+
     if (!activeTabPorts[tabId][info.path]){
         activeTabPorts[tabId][info.path] = {}
     }
@@ -164,27 +154,42 @@ function executeModule(tabId, info, config, tries = 15){
         if (injectQueue.length === 0){
             injectQueue.push(info.path);
 
-            chrome.tabs.executeScript(tabId, {code: `var module = {name: '${info.path}', config: ${JSON.stringify(config)}}`}, function(){
-                chrome.tabs.executeScript(tabId, {file: "module.js"}, function(){
-                    chrome.tabs.executeScript(tabId, {file: "content.js"}, function(){
-                        chrome.tabs.executeScript(tabId, {file: info.path}, function(){
-                            var port = chrome.tabs.connect(tabId, {name: info.path});
+            chrome.scripting.executeScript({
+                target: {tabId: tabId},
+                func: function(name, config){
+                    var module = {name: name};
+                    if (config !== null){
+                        module.config = config;
+                    }
+                    globalThis.module = module;
+                },
+                args: [info.path, config === undefined ? null : config]
+            }, function(){
+                chrome.scripting.executeScript({
+                    target: {tabId: tabId},
+                    files: ["module.js", "content.js", info.path]
+                }, function(){
+                    if (chrome.runtime.lastError){
+                        console.error("Failed to inject " + info.path + ": " + chrome.runtime.lastError.message);
+                        injectQueue = injectQueue.filter(item => item !== info.path);
+                        return;
+                    }
 
-                            port.onMessage.addListener(function(msg) {
-                              console.log('received message from tab ' + tabId + ':');
-                              console.log(msg);
-                            });
+                    var port = chrome.tabs.connect(tabId, {name: info.path});
 
-                            port.onDisconnect.addListener(function(event) {
-                              console.log("port disconnected");
-                              delete activeTabPorts[tabId][info.path];
-                            });
-
-                            port.postMessage({event: 'inject', module:info.path});
-
-                            activeTabPorts[tabId][info.path].port = port;
-                        });
+                    port.onMessage.addListener(function(msg) {
+                      console.log('received message from tab ' + tabId + ':');
+                      console.log(msg);
                     });
+
+                    port.onDisconnect.addListener(function(event) {
+                      console.log("port disconnected");
+                      delete activeTabPorts[tabId][info.path];
+                    });
+
+                    port.postMessage({event: 'inject', module:info.path});
+
+                    activeTabPorts[tabId][info.path].port = port;
                 });
             });
         }else{

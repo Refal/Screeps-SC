@@ -91,7 +91,7 @@ function dispatchEvent(name, data){
     document.dispatchEvent(evt);
 }
 
-chrome.extension.onConnect.addListener(function(port) {
+chrome.runtime.onConnect.addListener(function(port) {
     port.onMessage.removeListener(eventsSentFromBackground)
     port.onMessage.addListener(eventsSentFromBackground);
 });

@@ -1,14 +1,21 @@
 #!/bin/bash
 
-# Nome del file di output
-OUTPUT_FILE="Screeps-SC.zip"
+# Cartella di output per l'estensione non pacchettizzata
+OUTPUT_DIR="dist/Screeps-SC"
 
-# Rimuovi il vecchio file se esiste
-if [ -f "$OUTPUT_FILE" ]; then
-    rm "$OUTPUT_FILE"
-fi
+# Rimuovi la vecchia cartella se esiste
+rm -rf "$OUTPUT_DIR"
+mkdir -p "$OUTPUT_DIR"
 
-# Crea il file zip escludendo i file non necessari (come .git, .DS_Store, e lo script stesso)
-zip -r "$OUTPUT_FILE" . -x "*.git*" -x "*.DS_Store" -x "pack_extension.sh" -x ".github/*"
+# Copia i file escludendo quelli non necessari (come .git, .DS_Store, lo script stesso e dist)
+rsync -a \
+    --exclude=".git" \
+    --exclude=".github" \
+    --exclude=".DS_Store" \
+    --exclude="pack_extension.sh" \
+    --exclude="dist" \
+    --exclude="*.zip" \
+    ./ "$OUTPUT_DIR/"
 
-echo "Estensione pacchettizzata in $OUTPUT_FILE"
+echo "Estensione pronta in $OUTPUT_DIR"
+echo "In Chrome: chrome://extensions -> abilita 'Developer mode' -> 'Load unpacked' -> seleziona la cartella $OUTPUT_DIR"
