@@ -27,6 +27,7 @@ module.exports.init = function(){
                 module.exports.listenToConsole();
                 module.exports.fetchBucket();
                 module.exports.animateLoading();
+                module.exports.watchVisibility();
             }
             
 
@@ -53,6 +54,24 @@ module.exports.animateLoading = function(){
 module.exports.update = function(){
 }
 
+// The profile dropdown can be dismissed without the profile button (click
+// outside, Esc), so poll while the socket is open and shut everything down
+// as soon as the bucket indicator is no longer visible.
+module.exports.isBucketVisible = function(){
+    var el = document.getElementById('bucket');
+    return !!(el && el.offsetParent !== null);
+}
+
+module.exports.watchVisibility = function(){
+    if (module.exports.visibilityInterval == undefined){
+        module.exports.visibilityInterval = setInterval(function(){
+            if (!module.exports.isBucketVisible()){
+                module.exports.closeSocket();
+            }
+        }, 500);
+    }
+}
+
 module.exports.updateBucket = function(value){
     var bucket = parseInt(value);
 
@@ -62,14 +81,22 @@ module.exports.updateBucket = function(value){
         module.exports.animateLoadingInterval = undefined;
     }
 
+    if (!module.exports.isBucketVisible()){
+        return;
+    }
+
     document.getElementById('bucket_width').style.width = bucket / 1e4 * 100 + '%';
     document.getElementById('bucket_opacity').style.opacity = 1 - bucket / 1e4;
     document.getElementById('bucket_value').innerHTML = bucket;
 }
 
 module.exports.fetchBucket = function(){
+    if (!module.exports.socket || !module.exports.isBucketVisible()){
+        return;
+    }
+
     var command = `'SC-Bucket:' + Game.cpu.bucket`;
-    module.sendConsoleCommand(command, undefined, module.getCurrentShard());    
+    module.sendConsoleCommand(command, undefined, module.getCurrentShard());
 }
 
 module.exports.listenToConsole = function(){
@@ -86,8 +113,6 @@ module.exports.listenToConsole = function(){
     module.exports.socket.onmessage = function(msg){
 
         if (msg.data.indexOf("auth ok") > -1){
-            console.log("sending subscribe to console");
-
             var subscribe = "subscribe user:" + userid +"/console";
             module.exports.socket.send(subscribe);
         }
@@ -113,8 +138,17 @@ module.exports.listenToConsole = function(){
 
 module.exports.closeSocket = function(){
     if (module.exports.socket){
-        console.log("closing socket for bucket")
         module.exports.socket.close();
         module.exports.socket = undefined;
+    }
+
+    if (module.exports.animateLoadingInterval){
+        clearInterval(module.exports.animateLoadingInterval);
+        module.exports.animateLoadingInterval = undefined;
+    }
+
+    if (module.exports.visibilityInterval){
+        clearInterval(module.exports.visibilityInterval);
+        module.exports.visibilityInterval = undefined;
     }
 }
