@@ -1,16 +1,22 @@
+// Persists across repeated content script injections in the same page
+window.__scInjectedModules = window.__scInjectedModules || {};
+
 function inject(obj){
-    if (document.getElementById(obj.name)){
+    if (window.__scInjectedModules[obj.name]){
         console.log("injected twice");
 
         dispatchEvent(obj.name, {event: 'update'});
     }else{
-        var script = document.createElement('script');
-        script.id = obj.name;
-        script.textContent =`(function(){var module = ${toString(obj)}; module._init();})();`;
+        window.__scInjectedModules[obj.name] = true;
 
-        (document.body || document.head || document.documentElement).appendChild(script);
+        // Inline <script> tags are blocked by CSP under MV3, so the code is
+        // executed in the page's MAIN world by the background service worker.
+        chrome.runtime.sendMessage({
+            action: 'injectMain',
+            data: `(function(){var module = ${toString(obj)}; module._init();})();`
+        });
     }
-    
+
 }
 
 function toString(obj){

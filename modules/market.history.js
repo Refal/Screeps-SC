@@ -1,16 +1,16 @@
 module.exports.init = function(){
-    var userid = JSON.parse(localStorage.getItem('users.code.activeWorld'))[0]._id;
+    module.getUserId(function(userid){
+        module.ajaxGet("https://screeps.com/api/user/rooms?id=" + userid, function(data, error){
+            if (data && data.shards){
+                module.exports.shards = data.shards;
+            }else{
+                module.exports.shards = {};
+                console.error(data || error);
+            }
 
-    module.ajaxGet("https://screeps.com/api/user/rooms?id=" + userid, function(data, error){
-        if (data && data.shards){
-            module.exports.shards = data.shards;
-        }else{
-            module.exports.shards = {};
-            console.error(data || error);
-        }
-
-        module.exports.update();
-    });    
+            module.exports.update();
+        });
+    });
 }
 
 module.exports.update = function(){

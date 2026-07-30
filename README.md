@@ -6,11 +6,15 @@ Modular chrome extension for the game [screeps.com](https://screeps.com/).
 
 ### From Source / Release ZIP
 
+Requires Chrome 135 or newer.
+
 1. Download the latest `Screeps-SC.zip` from the [Releases page](https://github.com/DuPont9029/Screeps-SC/releases).
 2. Unzip the file to a folder on your computer.
 3. Open Chrome and go to `chrome://extensions`.
 4. Enable **Developer mode** (toggle in the top-right corner).
 5. Click **Load unpacked** and select the unzipped folder.
+6. Open **Details** for the Screeps SC extension and enable the **Allow user scripts** toggle (Chrome 138+; on older versions Developer mode covers it). Without it the modules cannot be injected into the game page.
+7. Open [screeps.com](https://screeps.com/a/#!/map) and reload the page. Modules are injected on a full page load, so hit F5 after navigating inside the game.
 
 ## Create your own module
 
@@ -45,7 +49,7 @@ Also take a look at the [settings.json](https://github.com/stybbe/Screeps-SC/blo
 
 1. On browser startup the extension will start listening on requests made to and from `*://screeps.com/*`.
 2. When a url for a request starts with a given value in `onUpdate` or `onCompleted` the background thread will execute the module `path` connected to the `onUpdate` or `onCompleted`.
-3. The `content.js` script will inject the `module.js` script together with the executed module. The executed module can access any function in the `module.js` script. Each module has their own `module.js` and it contains two module specific parameters `module.name` and `module.confg` (if you have set up a config in the `settings.json`).
+3. The `content.js` script bundles the `module.js` script together with the executed module, and the background worker runs the bundle in the page's main world via the `userScripts` API (this is why the **Allow user scripts** toggle is required). The executed module can access any function in the `module.js` script. Each module has their own `module.js` and it contains two module specific parameters `module.name` and `module.confg` (if you have set up a config in the `settings.json`).
 4. If it's the first time the module is injected to the page session the `module.exports.init` function will be called in the module. All other `onUpdate` or `onCompleted` triggers will call the `module.exports.update` function.
 
 ## [FAQ](https://github.com/stybbe/Screeps-SC/wiki/FAQ)

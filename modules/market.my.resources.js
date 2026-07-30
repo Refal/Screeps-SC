@@ -4,71 +4,62 @@ module.exports.init = function(){
     module.exports.tier2 = ['UH2O','UHO2','KH2O','KHO2','LH2O','LHO2','ZH2O','ZHO2','GH2O','GHO2'];
     module.exports.tier3 = ['XUH2O','XUHO2','XKH2O','XKHO2','XLH2O','XLHO2','XZH2O','XZHO2','XGH2O','XGHO2'];
 
-    var userid = JSON.parse(localStorage.getItem('users.code.activeWorld'))[0]._id;
+    module.getUserId(function(userid){
+        module.ajaxGet("https://screeps.com/api/user/rooms?id=" + userid, function(data, error){
+            if (data && data.shards){
+                module.exports.shards = data.shards;
+            }else{
+                module.exports.shards = {};
+                module.exports.shards.shards = {};
+                console.error(data || error);
+            }
 
-    module.ajaxGet("https://screeps.com/api/user/rooms?id=" + userid, function(data, error){
-        if (data && data.shards){
-            module.exports.shards = data.shards;
-        }else{
-            module.exports.shards = {};
-            module.exports.shards.shards = {};
-            console.error(data || error);
-        }
+            $('body').on('click', `.market-controls > button`, function () {
+                module.exports.fetchResources();
+            });
 
-        $('body').on('click', `.market-controls > button`, function () {
-            module.exports.fetchResources();
+            module.exports.update();
         });
-
-        module.exports.update();
-    });    
+    });
 }
 
 module.exports.update = function(){
 
-    if (window.location.href.startsWith("https://screeps.com/a/#!/market/all/")){
-        module.getScopeData("market-all-orders", "AllOrders", [], function(AllOrders){
-            var orgFunc = AllOrders.onShardChange;
-            AllOrders.onShardChange = function(){
-                module.exports.fetchResources();
-                orgFunc();
-            }
-        });
+    if (!window.location.href.startsWith("https://screeps.com/a/#!/market")){
+        return;
     }
-    
-    module.getScopeData("market", "$parent", [], function(){
+
+    // The market view is an app2 Angular app mounted directly under <body>,
+    // rendered on top of the old page-content shell — the panel must live
+    // inside the app-market element to be visible.
+    module.wait(function(){
+        return document.getElementsByTagName('app-market').length > 0;
+    }, 50, function(error){
+        if (error){
+            console.error("[Screeps-SC] market.my.resources: app-market element not found");
+            return;
+        }
 
         if (!document.getElementById('sc-my-resources')){
             var svg = module.exports.getLoadingSVG();
 
-            var bodyElement = 
-            $(`<div id="sc-my-resources" style="padding:30px 0 10px 30px;"><div style="font-size: 15px;">My resources:</div>
-                <select id="sc-dropdown" style="border-color: transparent;background: #444;color: #ccc;">
-                  <option value="None">None</option>
-                  <option value="Storage & Terminal" selected>Storage & Terminal</option>
-                  <option value="Storage">Storage</option>
-                  <option value="Terminal">Terminal</option>
-                </select>
-                ${svg}
-                <div id="container4" style="clear: left;float: left;width: 100%;overflow: hidden;">
-                <div id="container3" style="clear: left;float: left;width: 100%;position: relative;right: 25%;padding-bottom:15px;">
-                    <div id="container2 style="clear: left;float: left;width: 100%;position: relative;right: 25%;"">
-                        <div id="container1" style="float: left;width: 100%;position: relative;right: 52%;">
-                            <div id="col1" style="float: left;width: 23.75%;position: relative;left: 77%;overflow: hidden;">
-                            <div style="color: #999;">Base: </div>
-                            </div>
-                            <div id="col2" style="float: left;width: 23.75%;position: relative;left: 77.5%;overflow: hidden;">
-                            <div style="color: #999;">Tier 1: </div>
-                            </div>
-                            <div id="col3" style="float: left;width: 23.75%;position: relative;left: 78%;overflow: hidden;">
-                            <div style="color: #999;">Tier 2: </div>
-                            </div>
-                            <div id="col4" style="float: left;width: 23.75%;position: relative;left: 78.5%;overflow: hidden;">
-                            <div style="color: #999;">Tier 3: </div>
-                            </div>
-                        </div>
-                    </div>
+            var bodyElement =
+            $(`<div id="sc-my-resources" style="padding:15px 20px;width:100%;box-sizing:border-box;">
+                <div style="font-size: 15px;margin-bottom:8px;">My resources:
+                    <select id="sc-dropdown" style="border-color: transparent;background: #444;color: #ccc;margin-left:8px;">
+                      <option value="None">None</option>
+                      <option value="Storage & Terminal" selected>Storage & Terminal</option>
+                      <option value="Storage">Storage</option>
+                      <option value="Terminal">Terminal</option>
+                    </select>
                 </div>
-            </div>
+                ${svg}
+                <div id="container4" style="display:grid;grid-template-columns:repeat(4, 1fr);gap:0 12px;align-items:start;">
+                    <div id="col1"><div style="color: #999;">Base: </div></div>
+                    <div id="col2"><div style="color: #999;">Tier 1: </div></div>
+                    <div id="col3"><div style="color: #999;">Tier 2: </div></div>
+                    <div id="col4"><div style="color: #999;">Tier 3: </div></div>
+                </div>
             </div>`);
             
             var savedDrop = localStorage.getItem('scMarketDropdown');
@@ -97,7 +88,22 @@ module.exports.update = function(){
                 bodyElement.find('#col4').append(module.exports.getTabElement(module.exports.tier3[i]));
             }
 
-            $('.market.ng-scope > div:nth-child(1)').after(bodyElement);
+            // app-market lays its children out as a flex row, so the panel
+            // must live above it as a sibling rather than inside it.
+            $('app-market').before(bodyElement);
+
+            // The app2 router recreates app-market on in-app navigation,
+            // which silently drops the panel — re-insert it when that happens.
+            if (!module.exports.remountObserver){
+                module.exports.remountObserver = new MutationObserver(function(){
+                    if (!document.getElementById('sc-my-resources') &&
+                        document.getElementsByTagName('app-market').length > 0 &&
+                        window.location.href.startsWith("https://screeps.com/a/#!/market")){
+                        module.exports.update();
+                    }
+                });
+                module.exports.remountObserver.observe(document.body, {childList: true, subtree: true});
+            }
 
             module.exports.listenToConsole();
 
@@ -115,38 +121,12 @@ module.exports.update = function(){
                 if (this.value == "None"){
                     $('#container4').hide();
                 }else{
-                    $('#container4').show();
+                    $('#container4').css('display', 'grid');
                     module.exports.fetchResources();
                 }
                 localStorage.setItem('scMarketDropdown', this.value);
             });
         }
-
-        if (!window.SCresources){
-
-            if (window.location.href === 'https://screeps.com/a/#!/market/all'){
-                var verifyFunc = function(){
-                    var allOrdersScope = angular.element(document.getElementsByClassName('market-all-orders ng-scope')).scope();
-
-                    if (allOrdersScope && allOrdersScope.AllOrders && allOrdersScope.AllOrders.resources && allOrdersScope.AllOrders.resources && Object.keys(allOrdersScope.AllOrders.resources).length > 0){
-                        return true;
-                    }
-
-                    return false;
-                }
-                var delayFunc = function(){
-                    var allOrdersScope = angular.element(document.getElementsByClassName('market-all-orders ng-scope')).scope();
-                    if (!window.SCresources){
-                        window.resources = allOrdersScope.AllOrders.resources;
-                    }
-                    
-                    
-                }
-
-                module.wait(verifyFunc, 50, delayFunc);
-            }
-        }
-
 
     });
 }
@@ -165,24 +145,6 @@ module.exports.getTabElement = function(resource){
             </svg>
         </div>
         </a>`
-
-    var obj = $(tabElementText);
-
-    $('body').on('click', `#sc-${resource}`, function () {
-        setTimeout(function() {
-            var scope = angular.element(document.getElementsByClassName('market-all-orders-resource ng-scope')).scope();
-            if (scope && scope.ResourceOrders){
-                $('.resource-header.ng-binding > img').attr("src", `https://s3.amazonaws.com/static.screeps.com/upload/mineral-icons/${resource}.png`)
-                if (window.resources){
-                    scope.ResourceOrders.resourceName = window.resources[resource];
-                }else{
-                    scope.ResourceOrders.resourceName = resource;
-                }
-                
-                scope.ResourceOrders.reload();
-            }
-        }, 50);
-    });
 
     return $(tabElementText);
 }
@@ -264,21 +226,34 @@ module.exports.fetchResources = function(){
           <use xlink:href="#sc-svg-loading">
         </svg>`);
 
-    var shardSelect = $("button > span > span:contains('Shard:') > b");
+    // The old market UI's shard selector button is gone; fall back to the
+    // URL shard or the first shard the user has rooms on.
+    var shard = $("button > span > span:contains('Shard:') > b").text() || module.getCurrentShard();
 
-    module.sendConsoleCommand(command, undefined, shardSelect ? shardSelect.text() : undefined);
+    if (!shard && module.exports.shards){
+        for (var shardName in module.exports.shards){
+            if (module.exports.shards[shardName] && module.exports.shards[shardName].length){
+                shard = shardName;
+                break;
+            }
+        }
+    }
+
+    module.sendConsoleCommand(command, undefined, shard || undefined);
 }
 
 module.exports.listenToConsole = function(){
-    var auth = JSON.parse(localStorage.getItem('auth'));
-    var userid = JSON.parse(localStorage.getItem('users.code.activeWorld'))[0]._id;
-    var host = "wss://screeps.com/socket/websocket"
+    module.getUserId(function(userid){
+        module.exports.closeSocket();
 
-    module.exports.socket = new WebSocket(host);
+        var auth = JSON.parse(localStorage.getItem('auth'));
+        var host = "wss://screeps.com/socket/websocket"
 
-    module.exports.socket.onopen = function(){
-        module.exports.socket.send("auth " + auth);
-    }
+        module.exports.socket = new WebSocket(host);
+
+        module.exports.socket.onopen = function(){
+            module.exports.socket.send("auth " + auth);
+        }
 
     module.exports.socket.onmessage = function(msg){
         if (msg.data.indexOf("auth ok") > -1){
@@ -292,9 +267,21 @@ module.exports.listenToConsole = function(){
             var logArray = data[1].messages.log;
             logArray.forEach(function(log){
                 if (log.indexOf("SCMarket") > -1){
-                    var evalData = log.replace('<script>', '').replace('</script>', '');
-                    eval(evalData);
-                    module.exports.updateResourceAmount();
+                    // The server HTML-escapes console output (&lt;script&gt;,
+                    // &quot;), so decode entities via a textarea (parses as
+                    // plain text, nothing executes) and extract the JSON.
+                    var textarea = document.createElement('textarea');
+                    textarea.innerHTML = log;
+                    var match = textarea.value.match(/window\.SCMarket=(\{.*\})/);
+
+                    if (match){
+                        try {
+                            window.SCMarket = JSON.parse(match[1]);
+                            module.exports.updateResourceAmount();
+                        } catch (e){
+                            console.error("[Screeps-SC] market.my.resources: failed to parse SCMarket payload", e);
+                        }
+                    }
                 }
             });
         }
@@ -304,13 +291,14 @@ module.exports.listenToConsole = function(){
                 if (savedDrop !== "None"){
                     module.exports.fetchResources();
                 }
-                
+
                 this.recievedConsole = true;
             }
         }
 
         //console.log(msg);
-    }
+        }
+    });
 }
 
 module.exports.closeSocket = function(){

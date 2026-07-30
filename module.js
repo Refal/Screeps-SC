@@ -95,14 +95,21 @@ module.getScopeData = function(scopeName, objectPath, mustExistPathArr, cb){
 }
 
 module.setScopeData = function(scope, objectPath, value, cb){
-    var script = document.createElement('script');
-    script.textContent = `angular.element(document.getElementsByClassName('${scope} ng-scope')).scope().${objectPath}=${value};`;
+    // This code already runs in the page context, so the scope can be
+    // modified directly (inline <script> tags are blocked by CSP).
+    var obj = angular.element(document.getElementsByClassName(`${scope} ng-scope`)).scope();
+    var path = objectPath.split('.');
 
-    (document.body || document.head || document.documentElement).appendChild(script);
-    script.remove();
+    for (var i = 0; i < path.length - 1 && obj !== undefined && obj !== null; i++){
+        obj = obj[path[i]];
+    }
+
+    if (obj !== undefined && obj !== null){
+        obj[path[path.length - 1]] = value;
+    }
 
     if(cb){
-       cb(); 
+       cb();
     }
 }
 
@@ -179,6 +186,23 @@ module.ajaxGet = function(url, cb){
         url: url,
         method: 'GET'
     }, cb);
+}
+
+module.getUserId = function(cb){
+    var activeWorld = JSON.parse(localStorage.getItem('users.code.activeWorld') || 'null');
+
+    if (activeWorld && activeWorld[0] && activeWorld[0]._id){
+        cb(activeWorld[0]._id);
+    }else{
+        module.ajaxGet("https://screeps.com/api/auth/me", function(data, error){
+            if (data && data._id){
+                cb(data._id);
+            }else{
+                console.error("[Screeps-SC] Could not determine user id: " +
+                    "'users.code.activeWorld' is missing from localStorage and /api/auth/me failed.", error);
+            }
+        });
+    }
 }
 
 module.getCurrentShard = function(){

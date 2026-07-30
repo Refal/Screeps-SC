@@ -123,8 +123,48 @@ chrome.runtime.onMessage.addListener(function(request, sender, callback) {
         return true; // prevents the callback from being called too early on return
     } else if (request.action == "injected"){
         injectQueue = injectQueue.filter(item => item !== request.data);
+    } else if (request.action == "injectMain"){
+        if (!sender.tab || sender.tab.id < 0){
+            return;
+        }
+
+        // Page CSP blocks inline <script> tags, so modules are executed in the
+        // page's MAIN world through the userScripts API instead.
+        try {
+            chrome.userScripts.execute({
+                target: {tabId: sender.tab.id},
+                world: "MAIN",
+                js: [{code: request.data}]
+            }).then(function(results){
+                (results || []).forEach(function(result){
+                    if (result && result.error){
+                        console.error("Module execution error: " + result.error);
+                        logToTab(sender.tab.id, "module execution error: " + result.error);
+                    }
+                });
+            }).catch(function(e){
+                console.error("userScripts.execute failed: " + e);
+                logToTab(sender.tab.id, "module execution failed: " + e);
+            });
+        } catch (e) {
+            console.error("chrome.userScripts is unavailable. Enable the 'Allow user scripts' " +
+                "toggle for this extension in chrome://extensions (Chrome 138+), or enable " +
+                "Developer mode (older Chrome). Requires Chrome 135+. " + e);
+            logToTab(sender.tab.id, "chrome.userScripts is unavailable, cannot run modules. " +
+                "Enable the 'Allow user scripts' toggle for this extension in chrome://extensions.");
+        }
     }
 });
+
+// Errors and diagnostics from the background worker are invisible unless the
+// service worker console is open, so mirror them into the tab's console.
+function logToTab(tabId, message){
+    chrome.scripting.executeScript({
+        target: {tabId: tabId},
+        func: function(msg){ console.log("[Screeps-SC] " + msg); },
+        args: [message]
+    }).catch(function(){});
+}
 
 function getStorageSync(path, cb){
     var name = path.replace("modules/", "").replace(".js", "");
@@ -148,11 +188,13 @@ function executeModule(tabId, info, config, tries = 15){
     }
 
     if (activeTabPorts[tabId][info.path].port){
+        logToTab(tabId, "sending update to " + info.path);
         activeTabPorts[tabId][info.path].port.postMessage({event: 'update', module:info.path});
     }else{
 
         if (injectQueue.length === 0){
             injectQueue.push(info.path);
+            logToTab(tabId, "injecting " + info.path);
 
             chrome.scripting.executeScript({
                 target: {tabId: tabId},
@@ -171,6 +213,7 @@ function executeModule(tabId, info, config, tries = 15){
                 }, function(){
                     if (chrome.runtime.lastError){
                         console.error("Failed to inject " + info.path + ": " + chrome.runtime.lastError.message);
+                        logToTab(tabId, "failed to inject " + info.path + ": " + chrome.runtime.lastError.message);
                         injectQueue = injectQueue.filter(item => item !== info.path);
                         return;
                     }
@@ -195,6 +238,7 @@ function executeModule(tabId, info, config, tries = 15){
         }else{
             if (tries <= 0){
                 console.error("Failed to inject: " + info.path);
+                logToTab(tabId, "gave up injecting " + info.path + " (another module never finished injecting)");
             }else{
                 setTimeout(function(){
                     executeModule(tabId, info, config, tries - 1);

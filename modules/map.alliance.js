@@ -70,12 +70,24 @@ module.exports.update = function () {
       "WorldMap.roomStats",
     ],
     function (worldMap) {
-      $(".room-name.ng-binding")
-        .unbind("DOMSubtreeModified")
-        .bind("DOMSubtreeModified", function () {
+      // DOMSubtreeModified was removed from Chrome; watch the room name
+      // element with a MutationObserver instead.
+      var roomNameElement = document.getElementsByClassName(
+        "room-name ng-binding",
+      )[0];
+
+      if (roomNameElement) {
+        if (module.exports.roomNameObserver) {
+          module.exports.roomNameObserver.disconnect();
+        }
+
+        module.exports.roomNameObserver = new MutationObserver(function () {
           var roomElement = document.getElementsByClassName(
             "room-name ng-binding",
           )[0];
+          if (!roomElement) {
+            return;
+          }
           var roomName = roomElement.innerText.replace("Room", "").trim();
           $("div[id^=display-]").remove();
 
@@ -106,6 +118,13 @@ module.exports.update = function () {
             }
           }
         });
+
+        module.exports.roomNameObserver.observe(roomNameElement, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+        });
+      }
 
       if (worldMap.displayOptions.layer == "owner0" && worldMap.zoom == 3) {
         var visibleRoomElements = $("canvas.room-objects.ng-scope");

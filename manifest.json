@@ -3,12 +3,14 @@
   "description": "Extended browser functionality to the game Screeps",
   "version": "1.0",
   "manifest_version": 3,
+  "minimum_chrome_version": "135",
   "permissions": [
     "activeTab",
     "storage",
     "tabs",
     "webRequest",
-    "scripting"
+    "scripting",
+    "userScripts"
   ],
   "host_permissions": [
     "*://screeps.com/*",

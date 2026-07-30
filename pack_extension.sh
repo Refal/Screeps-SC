@@ -17,5 +17,5 @@ rsync -a \
     --exclude="*.zip" \
     ./ "$OUTPUT_DIR/"
 
-echo "Estensione pronta in $OUTPUT_DIR"
-echo "In Chrome: chrome://extensions -> abilita 'Developer mode' -> 'Load unpacked' -> seleziona la cartella $OUTPUT_DIR"
+echo "Estension copied in $OUTPUT_DIR"
+echo "In Chrome: chrome://extensions -> Enable 'Developer mode' -> 'Load unpacked' -> choose from $OUTPUT_DIR"
