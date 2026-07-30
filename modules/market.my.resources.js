@@ -40,6 +40,12 @@ module.exports.update = function(){
             return;
         }
 
+        // The wait above can take a few seconds — if the user has navigated
+        // away in the meantime, don't insert the panel.
+        if (!window.location.href.startsWith("https://screeps.com/a/#!/market")){
+            return;
+        }
+
         if (!document.getElementById('sc-my-resources')){
             var svg = module.exports.getLoadingSVG();
 
@@ -88,9 +94,13 @@ module.exports.update = function(){
                 bodyElement.find('#col4').append(module.exports.getTabElement(module.exports.tier3[i]));
             }
 
-            // app-market lays its children out as a flex row, so the panel
-            // must live above it as a sibling rather than inside it.
-            $('app-market').before(bodyElement);
+            // app-market itself is the scroll container (its CSS sets
+            // height: calc(100vh - 42px) with overflow-y: auto and lays its
+            // children out as a flex column), so prepending the panel as its
+            // first child keeps a single scrollbar shared with the orders.
+            // Inserting it as a sibling above app-market instead pushes the
+            // fixed-height app down and adds a second, page-level scrollbar.
+            $('app-market').prepend(bodyElement);
 
             // The app2 router recreates app-market on in-app navigation,
             // which silently drops the panel — re-insert it when that happens.
@@ -107,17 +117,17 @@ module.exports.update = function(){
 
             module.exports.listenToConsole();
 
-            $(window).on('hashchange', function(e){
-                var inMarketPage = window.location.href.startsWith('https://screeps.com/a/#!/market/');
+            // Namespaced so tearing down doesn't unbind other modules'
+            // hashchange handlers.
+            $(window).off('hashchange.scMarketResources').on('hashchange.scMarketResources', function(e){
+                var inMarketPage = window.location.href.startsWith('https://screeps.com/a/#!/market');
 
                 if (!inMarketPage){
-                    $(window).off('hashchange');
-                    module.exports.closeSocket();
+                    module.exports.teardown();
                 }
-                
             });
 
-            $('body').on('change', '#sc-dropdown', function () {
+            $('body').off('change.scMarketResources', '#sc-dropdown').on('change.scMarketResources', '#sc-dropdown', function () {
                 if (this.value == "None"){
                     $('#container4').hide();
                 }else{
@@ -129,6 +139,20 @@ module.exports.update = function(){
         }
 
     });
+}
+
+module.exports.teardown = function(){
+    // Leaving the market doesn't remove the panel by itself (and the
+    // background only sends update events on market URLs), so it has to be
+    // torn down explicitly. update() rebuilds everything on re-entry.
+    if (module.exports.remountObserver){
+        module.exports.remountObserver.disconnect();
+        module.exports.remountObserver = undefined;
+    }
+
+    $(window).off('hashchange.scMarketResources');
+    module.exports.closeSocket();
+    $('#sc-my-resources').remove();
 }
 
 module.exports.getTabElement = function(resource){
