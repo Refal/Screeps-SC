@@ -3,6 +3,7 @@ module.exports.init = function(){
     module.exports.tier1 = ['OH','ZK','UL','G','UH','UO','KH','KO','LH','LO','ZH','ZO','GH','GO'];
     module.exports.tier2 = ['UH2O','UHO2','KH2O','KHO2','LH2O','LHO2','ZH2O','ZHO2','GH2O','GHO2'];
     module.exports.tier3 = ['XUH2O','XUHO2','XKH2O','XKHO2','XLH2O','XLHO2','XZH2O','XZHO2','XGH2O','XGHO2'];
+    module.exports.compressed = ['utrium_bar','lemergium_bar','zynthium_bar','keanium_bar','ghodium_melt','oxidant','reductant','purifier','battery'];
 
     module.getUserId(function(userid){
         module.ajaxGet("https://screeps.com/api/user/rooms?id=" + userid, function(data, error){
@@ -60,38 +61,37 @@ module.exports.update = function(){
                     </select>
                 </div>
                 ${svg}
-                <div id="container4" style="display:grid;grid-template-columns:repeat(4, 1fr);gap:0 12px;align-items:start;">
-                    <div id="col1"><div style="color: #999;">Base: </div></div>
-                    <div id="col2"><div style="color: #999;">Tier 1: </div></div>
-                    <div id="col3"><div style="color: #999;">Tier 2: </div></div>
-                    <div id="col4"><div style="color: #999;">Tier 3: </div></div>
-                </div>
+                <div id="sc-resource-grid" style="display:grid;grid-template-columns:repeat(5, 1fr);gap:0 12px;align-items:start;"></div>
             </div>`);
-            
+
             var savedDrop = localStorage.getItem('scMarketDropdown');
             if (savedDrop){
                 var dropdownElement = bodyElement.find('#sc-dropdown');
                 dropdownElement.val(savedDrop);
 
                 if (savedDrop == "None"){
-                    bodyElement.find('#container4').hide();
+                    bodyElement.find('#sc-resource-grid').hide();
                 }
             }
-            
-            for(let i = 0; i < module.exports.base.length; i++){
-                bodyElement.find('#col1').append(module.exports.getTabElement(module.exports.base[i]));
-            }
 
-            for(let i = 0; i < module.exports.tier1.length; i++){
-                bodyElement.find('#col2').append(module.exports.getTabElement(module.exports.tier1[i]));
-            }
+            var columns = [
+                {title: 'Base',       resources: module.exports.base},
+                {title: 'Tier 1',     resources: module.exports.tier1},
+                {title: 'Tier 2',     resources: module.exports.tier2},
+                {title: 'Tier 3',     resources: module.exports.tier3},
+                {title: 'Compressed', resources: module.exports.compressed}
+            ];
 
-            for(let i = 0; i < module.exports.tier2.length; i++){
-                bodyElement.find('#col3').append(module.exports.getTabElement(module.exports.tier2[i]));
-            }
+            var grid = bodyElement.find('#sc-resource-grid');
 
-            for(let i = 0; i < module.exports.tier3.length; i++){
-                bodyElement.find('#col4').append(module.exports.getTabElement(module.exports.tier3[i]));
+            for (let c = 0; c < columns.length; c++){
+                var col = $(`<div><div style="color: #999;">${columns[c].title}: </div></div>`);
+
+                for (let i = 0; i < columns[c].resources.length; i++){
+                    col.append(module.exports.getTabElement(columns[c].resources[i]));
+                }
+
+                grid.append(col);
             }
 
             // app-market itself is the scroll container (its CSS sets
@@ -129,9 +129,9 @@ module.exports.update = function(){
 
             $('body').off('change.scMarketResources', '#sc-dropdown').on('change.scMarketResources', '#sc-dropdown', function () {
                 if (this.value == "None"){
-                    $('#container4').hide();
+                    $('#sc-resource-grid').hide();
                 }else{
-                    $('#container4').css('display', 'grid');
+                    $('#sc-resource-grid').css('display', 'grid');
                     module.exports.fetchResources();
                 }
                 localStorage.setItem('scMarketDropdown', this.value);
