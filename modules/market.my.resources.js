@@ -118,7 +118,11 @@ module.exports.update = function(){
             module.exports.listenToConsole();
 
             // Namespaced so tearing down doesn't unbind other modules'
-            // hashchange handlers.
+            // hashchange handlers. This app uses pushState-based routing, so
+            // this native event never actually fires for in-app navigation
+            // (verified empirically) — it's kept only in case that ever
+            // changes; teardown otherwise only happens via the remount
+            // observer failing to find the panel.
             $(window).off('hashchange.scMarketResources').on('hashchange.scMarketResources', function(e){
                 var inMarketPage = window.location.href.startsWith('https://screeps.com/a/#!/market');
 
@@ -136,6 +140,30 @@ module.exports.update = function(){
                 }
                 localStorage.setItem('scMarketDropdown', this.value);
             });
+
+            // The links are built with the shard resolved at panel-build
+            // time and go stale as soon as the user changes the market's own
+            // shard select (which doesn't touch the URL on the overview
+            // page). Re-resolve right before navigation instead of tracking
+            // every possible way the shard could have changed.
+            $('body').off('mousedown.scMarketResources', '#sc-my-resources a.market-resource')
+                     .on('mousedown.scMarketResources', '#sc-my-resources a.market-resource', function(){
+                var shard = module.exports.getMarketShard();
+                if (shard){
+                    this.href = `https://screeps.com/a/#!/market/all/${shard}/${this.dataset.resource}`;
+                }
+            });
+
+            // Amounts are intentionally NOT auto-refetched when the market's
+            // own shard select changes. That was tried (detecting the
+            // change via a capture-phase listener on mat-option, since a
+            // bubble-phase one never sees it — Material's own click handler
+            // stops propagation) but proved unreliable in testing: the
+            // in-game console round-trip this relies on can hang
+            // indefinitely for a shard the user owns no rooms on, and a
+            // subsequent fetch for a *working* shard can then hang too. An
+            // endless spinner is worse than the amounts staying on the
+            // previous shard until the user re-touches the dropdown below.
         }
 
     });
@@ -151,15 +179,56 @@ module.exports.teardown = function(){
     }
 
     $(window).off('hashchange.scMarketResources');
+    $('body').off('mousedown.scMarketResources', '#sc-my-resources a.market-resource');
     module.exports.closeSocket();
     $('#sc-my-resources').remove();
 }
 
-module.exports.getTabElement = function(resource){
-    var amount = 0;
-    var shard = module.getCurrentShard() || "shard0";
+module.exports.getMarketShard = function(){
+    // On a shard-specific market page (…/market/all/shardN/resource) the URL
+    // is authoritative.
+    var urlShard = module.getCurrentShard();
+    if (urlShard){
+        return urlShard;
+    }
 
-    var tabElementText = `<a id="sc-${resource}" class="market-resource" href="https://screeps.com/a/#!/market/all/${shard}/${resource}" style="background: #333;padding: 8px 10px;margin-top: 3px;display: flex;justify-content: space-between;font-size: 14px;cursor: pointer;text-decoration: none;color: #eee;" onmouseover="this.style.backgroundColor='#444'" onmouseout="this.style.backgroundColor='#333'">
+    // On the shardless overview (…/market/all) the shard only lives in the
+    // game's own mat-select above the resource grid. Its native resource
+    // cards already carry it in their href and re-render live when the user
+    // changes shard, so read it from there instead of the select's internals.
+    // Our own panel is prepended to app-market (see update()), so it comes
+    // first in DOM order and must be excluded or it would match itself.
+    var nativeCard = $('app-market a[href*="/market/all/shard"]').not('.market-resource').first();
+    if (nativeCard.length){
+        var match = nativeCard.attr('href').match(/\/market\/all\/(shard[^\/]+)\//);
+        if (match){
+            return match[1];
+        }
+    }
+
+    // Fallback for the brief window before the native cards have rendered:
+    // read the select's displayed text directly.
+    var selectText = $('app-market mat-select .mat-select-value-text').first().text().trim();
+    if (/^shard/.test(selectText)){
+        return selectText;
+    }
+
+    // Last resort (e.g. #!/market/history): first shard the user owns rooms on.
+    if (module.exports.shards){
+        for (var shardName in module.exports.shards){
+            if (module.exports.shards[shardName] && module.exports.shards[shardName].length){
+                return shardName;
+            }
+        }
+    }
+
+    return "";
+}
+
+module.exports.getTabElement = function(resource){
+    var shard = module.exports.getMarketShard();
+
+    var tabElementText = `<a id="sc-${resource}" data-resource="${resource}" class="market-resource" href="https://screeps.com/a/#!/market/all/${shard}/${resource}" style="background: #333;padding: 8px 10px;margin-top: 3px;display: flex;justify-content: space-between;font-size: 14px;cursor: pointer;text-decoration: none;color: #eee;" onmouseover="this.style.backgroundColor='#444'" onmouseout="this.style.backgroundColor='#333'">
         <div class="resource-name">
         <img src="https://s3.amazonaws.com/static.screeps.com/upload/mineral-icons/${resource}.png" style="margin-right: 3px;">
         </div>
@@ -250,11 +319,17 @@ module.exports.fetchResources = function(){
           <use xlink:href="#sc-svg-loading">
         </svg>`);
 
-    // The old market UI's shard selector button is gone; fall back to the
-    // URL shard or the first shard the user has rooms on.
-    var shard = $("button > span > span:contains('Shard:') > b").text() || module.getCurrentShard();
+    // Prefer the shard currently shown in the market (the resources page
+    // is only meaningful for that shard's trades), but only if the user
+    // actually owns rooms there — issuing the command against a shard with
+    // no rooms can leave this hanging forever waiting for console output
+    // that never arrives (verified: even a shard the user DOES own rooms on
+    // can then get stuck once a no-rooms shard has been queried). Falling
+    // back to a known-owned shard avoids ever triggering that.
+    var viewedShard = module.exports.getMarketShard();
+    var shard = viewedShard;
 
-    if (!shard && module.exports.shards){
+    if (module.exports.shards && !(module.exports.shards[viewedShard] && module.exports.shards[viewedShard].length)){
         for (var shardName in module.exports.shards){
             if (module.exports.shards[shardName] && module.exports.shards[shardName].length){
                 shard = shardName;
