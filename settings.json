@@ -19,6 +19,23 @@
             }
         },
         {
+            "path": "modules/map.battles.js",
+            "runAt":{
+                "onUpdate": "https://screeps.com/a/#!/map"
+            },
+            "options":{
+                "config":[
+                    {
+                        "name": "minClassification",
+                        "type": "select",
+                        "description": "Minimum battle severity to show on the map (reduces clutter)",
+                        "options": ["Off", "0", "1", "2", "3", "4", "5", "6", "7"],
+                        "defaultValue": "2"
+                    }
+                ]
+            }
+        },
+        {
             "path": "modules/market.history.js",
             "runAt":{
                 "onCompleted": "https://screeps.com/api/user/money-history"

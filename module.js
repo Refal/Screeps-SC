@@ -9,7 +9,7 @@ module._listener = function (e){
 
     switch(data.event) {
         case 'update':
-            module.exports.update();
+            module.exports.update(data);
             break;
         case 'dispose':
             module._dispose();

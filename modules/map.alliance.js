@@ -204,7 +204,7 @@ module.exports.update = function () {
           }
 
           canvaElement
-            .siblings(`div:not([id^=alliance-${sector.firstRoomName}])`)
+            .siblings(`div[id^=alliance-]:not([id^=alliance-${sector.firstRoomName}])`)
             .remove();
 
           var correctRooms = canvaElement.siblings(
@@ -307,7 +307,7 @@ module.exports.update = function () {
           var sector = sectorMapping[firstRoomName];
           if (sector) {
             $sectorEle
-              .find(`div:not([id^=alliance-1-${firstRoomName}])`)
+              .find(`div[id^=alliance-]:not([id^=alliance-1-${firstRoomName}])`)
               .remove();
 
             var correctRooms = $sectorEle.find(

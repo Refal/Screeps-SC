@@ -97,7 +97,20 @@ function dispatchEvent(name, data){
     document.dispatchEvent(evt);
 }
 
-chrome.runtime.onConnect.addListener(function(port) {
-    port.onMessage.removeListener(eventsSentFromBackground)
-    port.onMessage.addListener(eventsSentFromBackground);
-});
+// This whole file is re-executed once per module injected into this tab
+// (files: ["module.js", "content.js", info.path] runs separately per
+// module), but chrome.runtime.onConnect fires for every port on the tab,
+// not just the module it happens to be registered for. Registering it
+// unconditionally on every re-execution stacks up one listener per module
+// ever injected, so a single module's port message ends up handled once per
+// stacked listener -- causing duplicate xhttp fetches and "Failed to fetch
+// callback event" errors when only one of the duplicate deliveries can find
+// its callback. Guard registration so only the first execution in this tab
+// ever adds it.
+if (!window.__scOnConnectRegistered) {
+    window.__scOnConnectRegistered = true;
+
+    chrome.runtime.onConnect.addListener(function(port) {
+        port.onMessage.addListener(eventsSentFromBackground);
+    });
+}

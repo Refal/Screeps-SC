@@ -1,9 +1,13 @@
 module.exports.init = function(){
-    module.exports.base = ['energy','power','H','O','U','L','K','Z','X'];
+    module.exports.base = ['energy','H','O','U','L','K','Z','X','power'];
     module.exports.tier1 = ['OH','ZK','UL','G','UH','UO','KH','KO','LH','LO','ZH','ZO','GH','GO'];
     module.exports.tier2 = ['UH2O','UHO2','KH2O','KHO2','LH2O','LHO2','ZH2O','ZHO2','GH2O','GHO2'];
     module.exports.tier3 = ['XUH2O','XUHO2','XKH2O','XKHO2','XLH2O','XLHO2','XZH2O','XZHO2','XGH2O','XGHO2'];
-    module.exports.compressed = ['utrium_bar','lemergium_bar','zynthium_bar','keanium_bar','ghodium_melt','oxidant','reductant','purifier','battery'];
+    // Aligned index-for-index with base (energy/H/O/U/L/K/Z/X) so raw and
+    // compressed forms sit in the same grid row; power has no compressed
+    // form so it's moved to the bottom of base, and ghodium_melt (whose raw
+    // form G lives in tier1, not base) is appended at the bottom here.
+    module.exports.compressed = ['battery','reductant','oxidant','utrium_bar','lemergium_bar','keanium_bar','zynthium_bar','purifier','ghodium_melt'];
 
     module.getUserId(function(userid){
         module.ajaxGet("https://screeps.com/api/user/rooms?id=" + userid, function(data, error){
@@ -76,10 +80,10 @@ module.exports.update = function(){
 
             var columns = [
                 {title: 'Base',       resources: module.exports.base},
+                {title: 'Compressed', resources: module.exports.compressed},
                 {title: 'Tier 1',     resources: module.exports.tier1},
                 {title: 'Tier 2',     resources: module.exports.tier2},
-                {title: 'Tier 3',     resources: module.exports.tier3},
-                {title: 'Compressed', resources: module.exports.compressed}
+                {title: 'Tier 3',     resources: module.exports.tier3}
             ];
 
             var grid = bodyElement.find('#sc-resource-grid');

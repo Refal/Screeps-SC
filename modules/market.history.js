@@ -13,20 +13,55 @@ module.exports.init = function(){
     });
 }
 
-module.exports.update = function(){
-    module.getScopeData("market-history", "History", ['History.data.money.list'], function(history){
-        var list = history.data.money.list;
+module.exports.update = function(data){
+    // The market page was rebuilt as a modern Angular (Material table)
+    // component: the old '.market-history ng-scope' controller and
+    // '.market-history-description' elements are gone, and the rendered
+    // <mat-row> description cell only ever contains generic text ("Market
+    // fee", "Resources bought via market order") with none of the
+    // room/resource/price detail the old scope exposed. That detail is only
+    // in the network response, so re-fetch the exact same money-history
+    // request the page itself just made (URL captured by background.js from
+    // the intercepted request) instead of reading it out of Angular.
+    var historyUrl = (data && data.requestUrl) || module.requestUrl;
 
-        var elements = document.getElementsByClassName('market-history-description');
+    if (!historyUrl){
+        console.error("[Screeps-SC] market.history: no money-history request URL available to replay.");
+        return;
+    }
 
-        for(var i = 0; i < list.length; i++){
-            var historyObj = list[i];
-            if (historyObj.type == "market.fee"){
+    // Mark this as our own replay so background.js's onCompleted listener
+    // doesn't treat it as a fresh money-history request and re-trigger
+    // update() on it, which would fetch again forever.
+    var replayUrl = historyUrl + (historyUrl.indexOf('?') === -1 ? '?' : '&') + '_scNoTrigger=1';
 
-            } 
-            else if (historyObj.type == "market.buy" || historyObj.type == "market.sell"){
-                var shard = list[i].shard || "shard0";
-                var market = list[i].market
+    module.ajaxGet(replayUrl, function(response, error){
+        var list = response && response.list;
+
+        if (!list){
+            console.error("[Screeps-SC] market.history: unexpected money-history response shape.", response || error);
+            return;
+        }
+
+        module.wait(function(){
+            return document.querySelectorAll('mat-row.mat-row').length >= list.length;
+        }, 20, function(waitError){
+            var rows = document.querySelectorAll('mat-row.mat-row');
+
+            for(var i = 0; i < list.length && i < rows.length; i++){
+                var historyObj = list[i];
+
+                if (historyObj.type != "market.buy" && historyObj.type != "market.sell"){
+                    continue;
+                }
+
+                var descriptionCell = rows[i].querySelector('.cdk-column-description');
+                if (!descriptionCell){
+                    continue;
+                }
+
+                var shard = historyObj.shard || "shard0";
+                var market = historyObj.market;
                 var type = market.resourceType;
                 var roomName = market.roomName;
                 var targetRoomName = market.targetRoomName;
@@ -50,41 +85,38 @@ module.exports.update = function(){
 
                 var roomLink = `<a href="#!/room/${shard}/${roomName}">${roomName}</a>`;
                 var targetRoomLink = `<a href="#!/room/${shard}/${targetRoomName}">${targetRoomName}</a>`;
-                var infoCircle = '<div class="fa fa-question-circle" title=\'' + JSON.stringify(list[i].market) + '\'></div>'
+                var infoCircle = '<div class="fa fa-question-circle" title=\'' + JSON.stringify(market) + '\'></div>'
                 var transactionCostHtml = `(<span style="color:#ff8f8f;margin-right:-12px">-${transactionCost} ${resourceEnergy}</span>)`
 
                 if (historyObj.type == "market.buy"){
                     if (targetRoomIsMine){
-                        elements[i].innerHTML = `${roomLink} bought ${market.amount}${resourceIcon} (${market.price}) from ${targetRoomLink} ${transactionCostHtml} ${infoCircle}`;
+                        descriptionCell.innerHTML = `${roomLink} bought ${market.amount}${resourceIcon} (${market.price}) from ${targetRoomLink} ${transactionCostHtml} ${infoCircle}`;
                     }else{
-                        elements[i].innerHTML = `${roomLink} bought ${market.amount}${resourceIcon} (${market.price}) from ${targetRoomLink} ${infoCircle}`;
-                    }   
-                    
+                        descriptionCell.innerHTML = `${roomLink} bought ${market.amount}${resourceIcon} (${market.price}) from ${targetRoomLink} ${infoCircle}`;
+                    }
+
                 }else{
                     if (targetRoomIsMine){
-                        elements[i].innerHTML = `${roomLink} sold ${market.amount}${resourceIcon} (${market.price}) to ${targetRoomLink} ${transactionCostHtml} ${infoCircle}`;
+                        descriptionCell.innerHTML = `${roomLink} sold ${market.amount}${resourceIcon} (${market.price}) to ${targetRoomLink} ${transactionCostHtml} ${infoCircle}`;
                     }else{
-                        elements[i].innerHTML = `${roomLink} sold ${market.amount}${resourceIcon} (${market.price}) to ${targetRoomLink} ${infoCircle}`;
+                        descriptionCell.innerHTML = `${roomLink} sold ${market.amount}${resourceIcon} (${market.price}) to ${targetRoomLink} ${infoCircle}`;
                     }
                 }
             }
-            
-        }
-
+        });
     });
 }
 
 /* taken from @screeps market */
 module.exports.calcTransactionCost = function (amount, roomName1, roomName2) {
 
-    var distance = module.exports.calcRoomsDistance(roomName1, roomName2, true);
+    var distance = module.exports.calcRoomsDistance(roomName1, roomName2);
 
-    console.log("amount: " + amount + " roomName1: " + roomName1 + " roomName2: " + roomName2 + " distance: " + distance);
     return Math.ceil(amount*(1-Math.exp(-distance/30)))
 }
 
 /* taken from @screeps utils */
-module.exports.calcRoomsDistance = function (room1, room2, continuous) {
+module.exports.calcRoomsDistance = function (room1, room2) {
     var _exports$roomNameToXY = module.exports.roomNameToXY(room1);
 
     var _exports$roomNameToXY2 = module.exports._slicedToArray(_exports$roomNameToXY, 2);
@@ -99,15 +131,10 @@ module.exports.calcRoomsDistance = function (room1, room2, continuous) {
     var x2 = _exports$roomNameToXY4[0];
     var y2 = _exports$roomNameToXY4[1];
 
+    // Shards don't wrap around (unlike the single finite world this was
+    // originally written for), so no toroidal correction is needed here.
     var dx = Math.abs(x2 - x1);
     var dy = Math.abs(y2 - y1);
-    if (continuous) {
-        var width = constants.WORLD_WIDTH;
-        var height = constants.WORLD_HEIGHT;
-
-        dx = Math.min(width - dx, dx);
-        dy = Math.min(height - dy, dy);
-    }
     return Math.max(dx, dy);
 }
 

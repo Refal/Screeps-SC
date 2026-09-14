@@ -88,12 +88,12 @@ chrome.webRequest.onCompleted.addListener(function(details) {
     chrome.storage.local.get("onCompletedArr", function(data) {
         if (data.onCompletedArr){
             data.onCompletedArr.forEach(function(info){
-                if (details.url.startsWith(info.url)){
+                if (details.url.startsWith(info.url) && details.url.indexOf('_scNoTrigger=') === -1){
                     getStorageSync(info.path, function(option){
                         if (option && option.enabled !== false){
-                            executeModule(details.tabId, info, option.config);
+                            executeModule(details.tabId, info, option.config, undefined, details.url);
                         }else{
-                            executeModule(details.tabId, info);
+                            executeModule(details.tabId, info, undefined, undefined, details.url);
                         }
                     });
                 }
@@ -188,7 +188,7 @@ function getStorageSync(path, cb){
     });
 }
 
-function executeModule(tabId, info, config, tries = 15){
+function executeModule(tabId, info, config, tries = 15, requestUrl){
     if (!activeTabPorts[tabId]){
         activeTabPorts[tabId] = {}
     }
@@ -198,8 +198,7 @@ function executeModule(tabId, info, config, tries = 15){
     }
 
     if (activeTabPorts[tabId][info.path].port){
-        logToTab(tabId, "sending update to " + info.path);
-        activeTabPorts[tabId][info.path].port.postMessage({event: 'update', module:info.path});
+        activeTabPorts[tabId][info.path].port.postMessage({event: 'update', module:info.path, requestUrl: requestUrl});
     }else{
 
         var queue = injectQueue[tabId] || (injectQueue[tabId] = []);
@@ -210,14 +209,17 @@ function executeModule(tabId, info, config, tries = 15){
 
             chrome.scripting.executeScript({
                 target: {tabId: tabId},
-                func: function(name, config){
+                func: function(name, config, requestUrl){
                     var module = {name: name};
                     if (config !== null){
                         module.config = config;
                     }
+                    if (requestUrl !== null){
+                        module.requestUrl = requestUrl;
+                    }
                     globalThis.module = module;
                 },
-                args: [info.path, config === undefined ? null : config]
+                args: [info.path, config === undefined ? null : config, requestUrl === undefined ? null : requestUrl]
             }, function(){
                 chrome.scripting.executeScript({
                     target: {tabId: tabId},
@@ -256,7 +258,7 @@ function executeModule(tabId, info, config, tries = 15){
                 logToTab(tabId, "gave up injecting " + info.path + " (another module never finished injecting)");
             }else{
                 setTimeout(function(){
-                    executeModule(tabId, info, config, tries - 1);
+                    executeModule(tabId, info, config, tries - 1, requestUrl);
                 }, 500);
             }
         }
