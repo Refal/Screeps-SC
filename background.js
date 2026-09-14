@@ -1,5 +1,9 @@
 var activeTabPorts = {}
-var injectQueue = []
+// Keyed by tabId: paths currently mid-injection for that tab. Scoped per-tab
+// because the hazard this guards against (two injections racing to set the
+// shared globalThis.module value before content.js reads it) only exists
+// within a single tab, not across tabs or unrelated modules.
+var injectQueue = {}
 
 // The service worker is restarted on demand, so this runs on every startup
 // and keeps the module registrations in storage up to date.
@@ -122,7 +126,13 @@ chrome.runtime.onMessage.addListener(function(request, sender, callback) {
 
         return true; // prevents the callback from being called too early on return
     } else if (request.action == "injected"){
-        injectQueue = injectQueue.filter(item => item !== request.data);
+        if (sender.tab && injectQueue[sender.tab.id]){
+            injectQueue[sender.tab.id] = injectQueue[sender.tab.id].filter(item => item !== request.data);
+
+            if (injectQueue[sender.tab.id].length === 0){
+                delete injectQueue[sender.tab.id];
+            }
+        }
     } else if (request.action == "injectMain"){
         if (!sender.tab || sender.tab.id < 0){
             return;
@@ -192,8 +202,10 @@ function executeModule(tabId, info, config, tries = 15){
         activeTabPorts[tabId][info.path].port.postMessage({event: 'update', module:info.path});
     }else{
 
-        if (injectQueue.length === 0){
-            injectQueue.push(info.path);
+        var queue = injectQueue[tabId] || (injectQueue[tabId] = []);
+
+        if (queue.length === 0){
+            queue.push(info.path);
             logToTab(tabId, "injecting " + info.path);
 
             chrome.scripting.executeScript({
@@ -214,7 +226,10 @@ function executeModule(tabId, info, config, tries = 15){
                     if (chrome.runtime.lastError){
                         console.error("Failed to inject " + info.path + ": " + chrome.runtime.lastError.message);
                         logToTab(tabId, "failed to inject " + info.path + ": " + chrome.runtime.lastError.message);
-                        injectQueue = injectQueue.filter(item => item !== info.path);
+                        queue = injectQueue[tabId] = queue.filter(item => item !== info.path);
+                        if (queue.length === 0){
+                            delete injectQueue[tabId];
+                        }
                         return;
                     }
 
