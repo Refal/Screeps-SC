@@ -275,7 +275,10 @@ module.exports.makeMarkerHtml = function (id, battle, cellSize, left, top) {
   var color = module.exports.getBattleColor(battle.classification);
   var lastSeen = new Date(battle.lastseen).toLocaleString();
   var title = `Battle Lvl ${battle.classification}\nLast seen: ${lastSeen}\nID: ${battle.battleid}`;
-  var url = `https://screeps.com/a/#!/room/${battle.shard}/${battle.room}`;
+  var url =
+    battle.lastpvptick !== undefined
+      ? `https://screeps.com/a/#!/history/${battle.shard}/${battle.room}?t=${battle.lastpvptick}`
+      : `https://screeps.com/a/#!/room/${battle.shard}/${battle.room}`;
   var dotSize = Math.max(6, Math.round(cellSize * 0.35));
 
   var positionCss =

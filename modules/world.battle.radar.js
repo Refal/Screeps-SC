@@ -236,7 +236,10 @@ module.exports.renderBattles = function () {
 
   sortedBattles.forEach(function (battle) {
     var color = module.exports.getBattleColor(battle.classification);
-    var shardUrl = `https://screeps.com/a/#!/room/${battle.shard}/${battle.room}`;
+    var shardUrl =
+      battle.lastpvptick !== undefined
+        ? `https://screeps.com/a/#!/history/${battle.shard}/${battle.room}?t=${battle.lastpvptick}`
+        : `https://screeps.com/a/#!/room/${battle.shard}/${battle.room}`;
 
     // Format dates relative or short
     var lastSeen = new Date(battle.lastseen).toLocaleString();
