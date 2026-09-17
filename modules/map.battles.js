@@ -274,7 +274,8 @@ module.exports.renderZoom1 = function (worldMap, battlesByRoom) {
 module.exports.makeMarkerHtml = function (id, battle, cellSize, left, top) {
   var color = module.exports.getBattleColor(battle.classification);
   var lastSeen = new Date(battle.lastseen).toLocaleString();
-  var title = `Battle Lvl ${battle.classification}\nLast seen: ${lastSeen}\nID: ${battle.battleid}`;
+  var participants = module.exports.getBattleParticipants(battle);
+  var title = `Battle Lvl ${battle.classification}\n${participants.attackers} -> ${participants.defenders}\nLast seen: ${lastSeen}\nID: ${battle.battleid}`;
   var url =
     battle.lastpvptick !== undefined
       ? `https://screeps.com/a/#!/history/${battle.shard}/${battle.room}?t=${battle.lastpvptick}`
@@ -292,6 +293,27 @@ module.exports.makeMarkerHtml = function (id, battle, cellSize, left, top) {
              box-shadow: 0 0 2px rgba(0,0,0,0.8); border: 1px solid rgba(0,0,0,0.5);
              cursor: pointer; pointer-events: auto; display: block;"
       ></a>`;
+};
+
+// Battle records may have zero, one, or multiple participants per role
+// (e.g. multi-player fights), so this groups by role rather than assuming
+// a single attacker/defender pair.
+module.exports.getBattleParticipants = function (battle) {
+  var attackers = [];
+  var defenders = [];
+
+  (battle.participants || []).forEach(function (participant) {
+    if (participant.role === "attacker") {
+      attackers.push(participant.user);
+    } else if (participant.role === "defender") {
+      defenders.push(participant.user);
+    }
+  });
+
+  return {
+    attackers: attackers.length ? attackers.join(", ") : "Unknown",
+    defenders: defenders.length ? defenders.join(", ") : "Unknown",
+  };
 };
 
 module.exports.getBattleColor = function (classification) {
