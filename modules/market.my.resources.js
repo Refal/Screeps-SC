@@ -1,12 +1,12 @@
 module.exports.init = function(){
-    module.exports.base = ['energy','H','O','U','L','K','Z','X','power'];
-    module.exports.tier1 = ['OH','ZK','UL','G','UH','UO','KH','KO','LH','LO','ZH','ZO','GH','GO'];
+    module.exports.base = ['energy','H','O','U','L','K','Z','X','G','OH','ZK','UL','power'];
+    module.exports.tier1 = ['UH','UO','KH','KO','LH','LO','ZH','ZO','GH','GO'];
     module.exports.tier2 = ['UH2O','UHO2','KH2O','KHO2','LH2O','LHO2','ZH2O','ZHO2','GH2O','GHO2'];
     module.exports.tier3 = ['XUH2O','XUHO2','XKH2O','XKHO2','XLH2O','XLHO2','XZH2O','XZHO2','XGH2O','XGHO2'];
-    // Aligned index-for-index with base (energy/H/O/U/L/K/Z/X) so raw and
-    // compressed forms sit in the same grid row; power has no compressed
-    // form so it's moved to the bottom of base, and ghodium_melt (whose raw
-    // form G lives in tier1, not base) is appended at the bottom here.
+    // Aligned index-for-index with base (energy/H/O/U/L/K/Z/X/G) so raw and
+    // compressed forms sit in the same grid row. OH/ZK/UL and power have no
+    // compressed form and trail after G in base, past the end of this list —
+    // fine since each column renders independently.
     module.exports.compressed = ['battery','reductant','oxidant','utrium_bar','lemergium_bar','keanium_bar','zynthium_bar','purifier','ghodium_melt'];
 
     module.getUserId(function(userid){
