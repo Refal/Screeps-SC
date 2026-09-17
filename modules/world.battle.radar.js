@@ -513,6 +513,8 @@ module.exports.renderBattles = function () {
     // Format dates relative or short
     var lastSeen = new Date(battle.lastseen).toLocaleString();
 
+    var participants = module.exports.getBattleParticipants(battle);
+
     var card = `
         <div style="background: #333; border-left: 5px solid ${color}; padding: 10px; width: 300px; box-shadow: 0 2px 5px rgba(0,0,0,0.3);">
             <div style="font-weight: bold; font-size: 1.1em; margin-bottom: 5px; display: flex; justify-content: space-between;">
@@ -520,6 +522,7 @@ module.exports.renderBattles = function () {
                 <span style="background: ${color}; color: #000; padding: 2px 6px; border-radius: 3px; font-size: 0.8em;">Lvl ${battle.classification}</span>
             </div>
             <div style="font-size: 0.9em; color: #ccc;">
+                <div>${participants.attackers} &rarr; ${participants.defenders}</div>
                 <div>Last Seen: ${lastSeen}</div>
                 <div>ID: ${battle.battleid}</div>
             </div>
@@ -527,6 +530,27 @@ module.exports.renderBattles = function () {
         `;
     content.append(card);
   });
+};
+
+// Battle records may have zero, one, or multiple participants per role
+// (e.g. multi-player fights), so this groups by role rather than assuming
+// a single attacker/defender pair like nuke records have.
+module.exports.getBattleParticipants = function (battle) {
+  var attackers = [];
+  var defenders = [];
+
+  (battle.participants || []).forEach(function (participant) {
+    if (participant.role === "attacker") {
+      attackers.push(participant.user);
+    } else if (participant.role === "defender") {
+      defenders.push(participant.user);
+    }
+  });
+
+  return {
+    attackers: attackers.length ? attackers.join(", ") : "Unknown",
+    defenders: defenders.length ? defenders.join(", ") : "Unknown",
+  };
 };
 
 module.exports.renderNukes = function () {
