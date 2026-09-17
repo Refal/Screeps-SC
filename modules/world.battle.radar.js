@@ -1,5 +1,88 @@
+module.exports.nukes = [];
+module.exports.activeTab = "battles";
+module.exports.refreshTimer = null;
+
+// See modules/map.nukes.js's initSharedCache for why this exists and why it
+// must run inside a module.exports function rather than at the top level.
+module.exports.initSharedCache = function () {
+  window.__scThreatCache = window.__scThreatCache || {
+    nukes: null,
+    nukesFetchedAt: 0,
+    currentTickByShard: {},
+  };
+
+  window.__scThreatCache.fetchCurrentTick =
+    window.__scThreatCache.fetchCurrentTick ||
+    function (shard, cb) {
+      var cached = window.__scThreatCache.currentTickByShard[shard];
+      if (cached && Date.now() - cached.fetchedAt < 55000) {
+        cb(cached.time);
+        return;
+      }
+
+      module.ajaxGet(
+        "https://screeps.com/api/game/time?shard=" + shard,
+        function (data, error) {
+          if (data && data.ok && typeof data.time === "number") {
+            window.__scThreatCache.currentTickByShard[shard] = {
+              time: data.time,
+              fetchedAt: Date.now(),
+            };
+            cb(data.time);
+          } else {
+            console.warn(
+              "Threat Radar: failed to fetch current tick for " + shard,
+              error,
+            );
+            cb(cached ? cached.time : undefined);
+          }
+        },
+      );
+    };
+
+  window.__scThreatCache.getTicksRemaining =
+    window.__scThreatCache.getTicksRemaining ||
+    function (nuke) {
+      var cached = window.__scThreatCache.currentTickByShard[nuke.shard];
+      if (!cached || typeof nuke.landTime !== "number") {
+        return undefined;
+      }
+      return nuke.landTime - cached.time;
+    };
+
+  window.__scThreatCache.getNukeColor =
+    window.__scThreatCache.getNukeColor ||
+    function (ticksRemaining) {
+      if (ticksRemaining === undefined) {
+        return "#808080"; // Gray - unknown timing
+      }
+
+      if (ticksRemaining < 1000) {
+        return "#FF0000"; // Red - imminent
+      } else if (ticksRemaining < 5000) {
+        return "#FF8C00"; // DarkOrange
+      } else if (ticksRemaining < 20000) {
+        return "#FFD700"; // Gold
+      }
+
+      return "#4169E1"; // RoyalBlue - far out
+    };
+
+  window.__scThreatCache.getNukeLink =
+    window.__scThreatCache.getNukeLink ||
+    function (nuke, ticksRemaining) {
+      if (ticksRemaining !== undefined && ticksRemaining <= 0) {
+        return `https://screeps.com/a/#!/history/${nuke.shard}/${nuke.room}?t=${nuke.landTime}`;
+      }
+
+      return `https://screeps.com/a/#!/room/${nuke.shard}/${nuke.room}`;
+    };
+};
+
 module.exports.init = function () {
-  console.log("Battle Radar: Init started");
+  console.log("Threat Radar: Init started");
+
+  module.exports.initSharedCache();
 
   // Inject button immediately (waiting for UI)
   var attempts = 0;
@@ -10,19 +93,30 @@ module.exports.init = function () {
     var navList = $("nav.menu > ol").first(); // Get the first list (Main Navigation)
 
     if (navList.length) {
-      console.log("Battle Radar: Navbar list found, injecting button");
+      console.log("Threat Radar: Navbar list found, injecting button");
       clearInterval(checkExist);
       module.exports.injectSidebarButton(navList);
     } else {
       if (attempts % 10 === 0)
         console.log(
-          "Battle Radar: Navbar not found yet (attempt " + attempts + ")...",
+          "Threat Radar: Navbar not found yet (attempt " + attempts + ")...",
         );
     }
   }, 1000);
 
   // Initial load
   module.exports.fetchBattles();
+  module.exports.fetchNukes();
+
+  // Keep the modal's data fresh while it's open; unlike map.nukes.js this
+  // module has no URL-based signal for "in use", so gate on modal visibility.
+  module.exports.refreshTimer = setInterval(function () {
+    if (!$("#threat-radar-modal").is(":visible")) {
+      return;
+    }
+    module.exports.fetchBattles();
+    module.exports.fetchNukes();
+  }, 60000);
 };
 
 module.exports.fetchBattles = function () {
@@ -34,7 +128,7 @@ module.exports.fetchBattles = function () {
       url: "https://www.leagueofautomatednations.com/vk/battles_full.json",
     },
     function (response) {
-      console.log("Battle Radar: Battles data received", response);
+      console.log("Threat Radar: Battles data received", response);
       try {
         if (!response.data) {
           throw new Error("Empty response data");
@@ -54,7 +148,7 @@ module.exports.fetchBattles = function () {
           // Handle case where data might be wrapped in .records (current API format)
           module.exports.battles = parsed.records;
         } else {
-          console.warn("Battle Radar: Unexpected data format", parsed);
+          console.warn("Threat Radar: Unexpected data format", parsed);
           module.exports.battles = [];
           throw new Error(
             "Data is not an array (checked root, .battles, and .records)",
@@ -62,7 +156,7 @@ module.exports.fetchBattles = function () {
         }
 
         console.log(
-          "Battle Radar: Loaded " + module.exports.battles.length + " battles",
+          "Threat Radar: Loaded " + module.exports.battles.length + " battles",
         );
         $("#battle-radar-status").text(
           "Loaded " + module.exports.battles.length + " battles",
@@ -73,17 +167,134 @@ module.exports.fetchBattles = function () {
         $("#battle-radar-status").text("Error: " + e.message);
       }
 
-      // If modal is open, update it
-      if ($("#battle-radar-modal").is(":visible")) {
+      // If modal is open on the Battles tab, update it
+      if (
+        $("#threat-radar-modal").is(":visible") &&
+        module.exports.activeTab === "battles"
+      ) {
         module.exports.renderBattles();
       }
     },
   );
 };
 
+module.exports.fetchNukes = function () {
+  var shared = window.__scThreatCache;
+
+  function finish(fetchFailed) {
+    module.exports.refreshCurrentTicks(function () {
+      if (!fetchFailed) {
+        $("#nuke-radar-status").text(
+          module.exports.nukes.length + " nukes loaded",
+        );
+      }
+
+      // If modal is open on the Nukes tab, update it
+      if (
+        $("#threat-radar-modal").is(":visible") &&
+        module.exports.activeTab === "nukes"
+      ) {
+        module.exports.renderNukes();
+      }
+    });
+  }
+
+  if (shared.nukes && Date.now() - shared.nukesFetchedAt < 10000) {
+    module.exports.nukes = shared.nukes;
+    finish(false);
+    return;
+  }
+
+  $("#nuke-radar-status").text("Fetching data...");
+
+  module.dispatchEvent(
+    {
+      event: "xhttp",
+      url: "https://www.leagueofautomatednations.com/vk/nukes.json",
+    },
+    function (response) {
+      console.log("Threat Radar: Nukes data received", response);
+      var fetchFailed = false;
+
+      try {
+        if (!response.data) {
+          throw new Error("Empty response data");
+        }
+
+        var parsed =
+          typeof response.data === "string"
+            ? JSON.parse(response.data)
+            : response.data;
+
+        if (Array.isArray(parsed)) {
+          module.exports.nukes = parsed;
+        } else if (parsed && Array.isArray(parsed.nukes)) {
+          module.exports.nukes = parsed.nukes;
+        } else if (parsed && Array.isArray(parsed.records)) {
+          module.exports.nukes = parsed.records;
+        } else {
+          console.warn("Threat Radar: Unexpected nuke data format", parsed);
+          module.exports.nukes = [];
+          throw new Error(
+            "Data is not an array (checked root, .nukes, and .records)",
+          );
+        }
+
+        console.log(
+          "Threat Radar: Loaded " + module.exports.nukes.length + " nukes",
+        );
+      } catch (e) {
+        console.error("Error parsing nukes data:", e);
+        fetchFailed = true;
+        module.exports.nukes = [];
+        $("#nuke-radar-status").text("Error: " + e.message);
+      }
+
+      shared.nukes = module.exports.nukes;
+      shared.nukesFetchedAt = Date.now();
+
+      finish(fetchFailed);
+    },
+  );
+};
+
+module.exports.refreshCurrentTicks = function (cb) {
+  var shards = {};
+  (module.exports.nukes || []).forEach(function (nuke) {
+    if (nuke.shard) {
+      shards[nuke.shard] = true;
+    }
+  });
+
+  var shardNames = Object.keys(shards);
+  var remaining = shardNames.length;
+
+  if (remaining === 0) {
+    cb();
+    return;
+  }
+
+  shardNames.forEach(function (shard) {
+    module.exports.fetchCurrentTick(shard, function () {
+      remaining--;
+      if (remaining === 0) {
+        cb();
+      }
+    });
+  });
+};
+
+module.exports.fetchCurrentTick = function (shard, cb) {
+  window.__scThreatCache.fetchCurrentTick(shard, cb);
+};
+
+module.exports.getTicksRemaining = function (nuke) {
+  return window.__scThreatCache.getTicksRemaining(nuke);
+};
+
 module.exports.injectSidebarButton = function (container) {
-  if ($("#battle-radar-li").length) {
-    console.log("Battle Radar: Button already exists");
+  if ($("#threat-radar-li").length) {
+    console.log("Threat Radar: Button already exists");
     return;
   }
 
@@ -98,19 +309,19 @@ module.exports.injectSidebarButton = function (container) {
       }
     });
   }
-  console.log("Battle Radar: Found Angular attribute: " + ngAttr);
+  console.log("Threat Radar: Found Angular attribute: " + ngAttr);
   var attrStr = ngAttr ? ` ${ngAttr}=""` : "";
 
   var radarSvg = module.exports.getRadarSvg();
 
   // Create LI element matching the existing structure with Angular attribute
-  var li = $(`<li id="battle-radar-li" class=""${attrStr}>
+  var li = $(`<li id="threat-radar-li" class=""${attrStr}>
         <a class="menu__item" style="cursor: pointer;"${attrStr}>
             <svg class="__icon"${attrStr} viewBox="0 0 24 24">
                 ${radarSvg}
             </svg>
             <div class="--flex --column"${attrStr}>
-                <div${attrStr}>Battle Radar</div>
+                <div${attrStr}>Threat Radar</div>
             </div>
         </a>
         <svg class="__dust"${attrStr}><use xlink:href="#symbol-menu-dust"${attrStr}></use></svg>
@@ -118,7 +329,7 @@ module.exports.injectSidebarButton = function (container) {
 
   // Append to the end of the first list
   container.append(li);
-  console.log("Battle Radar: LI appended to navbar");
+  console.log("Threat Radar: LI appended to navbar");
 
   // Add hover effect if needed, though CSS should handle it if attributes match
   li.find("a").hover(
@@ -137,25 +348,33 @@ module.exports.injectSidebarButton = function (container) {
 };
 
 module.exports.openModal = function () {
-  if ($("#battle-radar-modal").length) {
-    $("#battle-radar-modal").show();
-    module.exports.renderBattles(); // Re-render in case of updates
+  if ($("#threat-radar-modal").length) {
+    $("#threat-radar-modal").show();
+    module.exports.updateTabUI(); // Re-render in case of updates
     return;
   }
 
   var modalHtml = `
-    <div id="battle-radar-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 10000; display: flex; align-items: center; justify-content: center;">
+    <div id="threat-radar-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 10000; display: flex; align-items: center; justify-content: center;">
         <div style="background: #222; width: 90%; max-width: 1200px; max-height: 90%; overflow-y: auto; padding: 20px; border: 1px solid #444; color: #eee; font-family: Roboto, sans-serif; border-radius: 4px;">
             <div style="display: flex; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px solid #444; padding-bottom: 10px;">
                 <div style="display: flex; align-items: center; gap: 15px;">
-                    <h2 style="margin: 0;">Battle Radar</h2>
-                    <button id="battle-radar-refresh" style="background: #444; color: #fff; border: none; padding: 5px 10px; cursor: pointer; border-radius: 3px;">Refresh</button>
+                    <h2 style="margin: 0;">Threat Radar</h2>
+                    <button id="threat-radar-refresh" style="background: #444; color: #fff; border: none; padding: 5px 10px; cursor: pointer; border-radius: 3px;">Refresh</button>
                     <span id="battle-radar-status" style="font-size: 0.9em; color: #aaa;"></span>
+                    <span id="nuke-radar-status" style="font-size: 0.9em; color: #aaa;"></span>
                 </div>
-                <button id="battle-radar-close" style="background: none; border: none; color: #888; font-size: 24px; cursor: pointer;">&times;</button>
+                <button id="threat-radar-close" style="background: none; border: none; color: #888; font-size: 24px; cursor: pointer;">&times;</button>
+            </div>
+            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                <button id="radar-tab-battles" style="background: #444; color: #fff; border: none; padding: 6px 14px; cursor: pointer; border-radius: 3px;">Battles</button>
+                <button id="radar-tab-nukes" style="background: #333; color: #aaa; border: none; padding: 6px 14px; cursor: pointer; border-radius: 3px;">Nukes</button>
             </div>
             <div id="battle-radar-content" style="display: flex; flex-wrap: wrap; gap: 10px;">
                 <p>Loading battles...</p>
+            </div>
+            <div id="nuke-radar-content" style="display: none; flex-wrap: wrap; gap: 10px;">
+                <p>Loading nukes...</p>
             </div>
         </div>
     </div>
@@ -163,15 +382,65 @@ module.exports.openModal = function () {
 
   $("body").append(modalHtml);
 
-  $("#battle-radar-close").click(function () {
-    $("#battle-radar-modal").hide();
+  $("#threat-radar-close").click(function () {
+    $("#threat-radar-modal").hide();
   });
 
-  $("#battle-radar-refresh").click(function () {
+  $("#threat-radar-refresh").click(function () {
     module.exports.fetchBattles();
+    module.exports.fetchNukes();
   });
 
-  module.exports.renderBattles();
+  $("#radar-tab-battles").click(function () {
+    module.exports.activeTab = "battles";
+    module.exports.updateTabUI();
+  });
+
+  $("#radar-tab-nukes").click(function () {
+    module.exports.activeTab = "nukes";
+    module.exports.updateTabUI();
+  });
+
+  module.exports.updateTabUI();
+};
+
+// Data-driven so adding a future tab means adding one entry here, not a new
+// branch in every toggle site.
+module.exports.tabs = {
+  battles: {
+    contentSelector: "#battle-radar-content",
+    statusSelector: "#battle-radar-status",
+    tabSelector: "#radar-tab-battles",
+    render: function () {
+      module.exports.renderBattles();
+    },
+  },
+  nukes: {
+    contentSelector: "#nuke-radar-content",
+    statusSelector: "#nuke-radar-status",
+    tabSelector: "#radar-tab-nukes",
+    render: function () {
+      module.exports.renderNukes();
+    },
+  },
+};
+
+module.exports.updateTabUI = function () {
+  var activeTab = module.exports.activeTab;
+
+  Object.keys(module.exports.tabs).forEach(function (tabName) {
+    var tab = module.exports.tabs[tabName];
+    var isActive = tabName === activeTab;
+
+    $(tab.contentSelector).css("display", isActive ? "flex" : "none");
+    $(tab.statusSelector).css("display", isActive ? "inline" : "none");
+    $(tab.tabSelector).css({
+      background: isActive ? "#444" : "#333",
+      color: isActive ? "#fff" : "#aaa",
+    });
+  });
+
+  module.exports.tabs[activeTab].render();
 };
 
 module.exports.renderBattles = function () {
@@ -186,7 +455,7 @@ module.exports.renderBattles = function () {
 
   if (!Array.isArray(module.exports.battles)) {
     console.error(
-      "Battle Radar: battles is not an array",
+      "Threat Radar: battles is not an array",
       module.exports.battles,
     );
     // Try to recover if it's an object with numeric keys (unlikely but possible)
@@ -202,7 +471,7 @@ module.exports.renderBattles = function () {
 
   // Filter by current shard
   var currentShard = module.getCurrentShard();
-  console.log("Battle Radar: Current shard: " + currentShard);
+  console.log("Threat Radar: Current shard: " + currentShard);
 
   var filteredBattles = module.exports.battles;
   if (currentShard) {
@@ -260,6 +529,89 @@ module.exports.renderBattles = function () {
   });
 };
 
+module.exports.renderNukes = function () {
+  var content = $("#nuke-radar-content");
+  content.empty();
+
+  if (!Array.isArray(module.exports.nukes)) {
+    module.exports.nukes = [];
+  }
+
+  // Filter by current shard
+  var currentShard = module.getCurrentShard();
+  console.log("Threat Radar: Current shard: " + currentShard);
+
+  var filteredNukes = module.exports.nukes;
+  if (currentShard) {
+    filteredNukes = module.exports.nukes.filter(function (nuke) {
+      return nuke.shard === currentShard;
+    });
+  }
+
+  if (filteredNukes.length === 0) {
+    content.html(
+      "<p>No incoming nukes found" +
+        (currentShard ? " in " + currentShard : "") +
+        ".</p>",
+    );
+    $("#nuke-radar-status").text(
+      "0 nukes" + (currentShard ? " (" + currentShard + ")" : ""),
+    );
+    return;
+  }
+
+  $("#nuke-radar-status").text(
+    filteredNukes.length +
+      " nukes" +
+      (currentShard ? " (" + currentShard + ")" : ""),
+  );
+
+  // Sort nukes by ticks remaining ascending (most urgent first); unknown
+  // ticks (current tick lookup failed) sort last.
+  var sortedEntries = filteredNukes
+    .map(function (nuke) {
+      return { nuke: nuke, ticksRemaining: module.exports.getTicksRemaining(nuke) };
+    })
+    .sort(function (a, b) {
+      if (a.ticksRemaining === undefined && b.ticksRemaining === undefined) {
+        return 0;
+      }
+      if (a.ticksRemaining === undefined) {
+        return 1;
+      }
+      if (b.ticksRemaining === undefined) {
+        return -1;
+      }
+      return a.ticksRemaining - b.ticksRemaining;
+    });
+
+  sortedEntries.forEach(function (entry) {
+    var nuke = entry.nuke;
+    var ticksRemaining = entry.ticksRemaining;
+    var color = module.exports.getNukeColor(ticksRemaining);
+    var url = module.exports.getNukeLink(nuke, ticksRemaining);
+    var impactText =
+      ticksRemaining !== undefined
+        ? ticksRemaining + " ticks until impact"
+        : "Impact tick: " + nuke.landTime;
+
+    var card = `
+        <div style="background: #333; border-left: 5px solid ${color}; padding: 10px; width: 300px; box-shadow: 0 2px 5px rgba(0,0,0,0.3);">
+            <div style="font-weight: bold; font-size: 1.1em; margin-bottom: 5px; display: flex; justify-content: space-between;">
+                <a href="${url}" target="_blank" style="color: #eee; text-decoration: none;">${nuke.room} <span style="font-size: 0.8em; color: #aaa;">(${nuke.shard})</span></a>
+                <span style="background: ${color}; color: #000; padding: 2px 6px; border-radius: 3px; font-size: 0.8em;">Lvl ${nuke.level}</span>
+            </div>
+            <div style="font-size: 0.9em; color: #ccc;">
+                <div>${impactText}</div>
+                <div>Launched from: ${nuke.launchRoom}</div>
+                <div>${nuke.attacker} &rarr; ${nuke.defender}</div>
+            </div>
+        </div>
+        `;
+    content.append(card);
+  });
+};
+
 module.exports.getBattleColor = function (classification) {
   // Distinct colors for battle levels
   var level = parseInt(classification) || 0;
@@ -285,6 +637,14 @@ module.exports.getBattleColor = function (classification) {
       if (level > 7) return "#FF0000"; // Pure Red
       return "#FFFFFF"; // White
   }
+};
+
+module.exports.getNukeColor = function (ticksRemaining) {
+  return window.__scThreatCache.getNukeColor(ticksRemaining);
+};
+
+module.exports.getNukeLink = function (nuke, ticksRemaining) {
+  return window.__scThreatCache.getNukeLink(nuke, ticksRemaining);
 };
 
 module.exports.getRadarSvg = function () {

@@ -36,6 +36,12 @@
             }
         },
         {
+            "path": "modules/map.nukes.js",
+            "runAt":{
+                "onUpdate": "https://screeps.com/a/#!/map"
+            }
+        },
+        {
             "path": "modules/market.history.js",
             "runAt":{
                 "onCompleted": "https://screeps.com/api/user/money-history"
