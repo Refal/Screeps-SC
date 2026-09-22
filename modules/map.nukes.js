@@ -1,5 +1,8 @@
 module.exports.nukes = [];
 module.exports.refreshTimer = null;
+module.exports.renderTimer = null;
+module.exports.lastZoom = null;
+module.exports.lastLogKey = null;
 
 // Sets up (once per tab, idempotently) a cache + a single implementation of
 // the tick/color/link helpers shared with modules/world.battle.radar.js, so
@@ -16,6 +19,7 @@ module.exports.initSharedCache = function () {
     nukes: null,
     nukesFetchedAt: 0,
     currentTickByShard: {},
+    tickFetchInFlight: {},
   };
 
   window.__scThreatCache.fetchCurrentTick =
@@ -27,9 +31,23 @@ module.exports.initSharedCache = function () {
         return;
       }
 
+      // Callers can tick far faster than the request completes; serve the
+      // stale value rather than piling up duplicate requests.
+      var inFlight = (window.__scThreatCache.tickFetchInFlight =
+        window.__scThreatCache.tickFetchInFlight || {});
+
+      if (inFlight[shard]) {
+        cb(cached ? cached.time : undefined);
+        return;
+      }
+
+      inFlight[shard] = true;
+
       module.ajaxGet(
         "https://screeps.com/api/game/time?shard=" + shard,
         function (data, error) {
+          inFlight[shard] = false;
+
           if (data && data.ok && typeof data.time === "number") {
             window.__scThreatCache.currentTickByShard[shard] = {
               time: data.time,
@@ -41,6 +59,12 @@ module.exports.initSharedCache = function () {
               "Threat Radar: failed to fetch current tick for " + shard,
               error,
             );
+            // Record the attempt so a persistent failure backs off to one
+            // request per cache window instead of one per tick.
+            window.__scThreatCache.currentTickByShard[shard] = {
+              time: cached ? cached.time : undefined,
+              fetchedAt: Date.now(),
+            };
             cb(cached ? cached.time : undefined);
           }
         },
@@ -51,7 +75,11 @@ module.exports.initSharedCache = function () {
     window.__scThreatCache.getTicksRemaining ||
     function (nuke) {
       var cached = window.__scThreatCache.currentTickByShard[nuke.shard];
-      if (!cached || typeof nuke.landTime !== "number") {
+      if (
+        !cached ||
+        typeof cached.time !== "number" ||
+        typeof nuke.landTime !== "number"
+      ) {
         return undefined;
       }
       return nuke.landTime - cached.time;
@@ -96,6 +124,24 @@ module.exports.init = function () {
     }
     module.exports.fetchNukes();
   }, 60000);
+
+  // The extension only pushes 'update' on tab navigation, never on map
+  // pan/zoom -- but the client recycles sector containers while panning, so
+  // markers must be re-anchored far more often than the 60s refetch. This
+  // tick is DOM-only: fetchCurrentTick serves from window.__scThreatCache
+  // and calls back synchronously while that cache is fresh.
+  module.exports.renderTimer = setInterval(function () {
+    if (window.location.href.indexOf("#!/map") === -1) {
+      return;
+    }
+    // Check the scope synchronously first: update() -> getScopeData would
+    // otherwise poll for ~5s and then console.error every time the map scope
+    // is not populated yet, which at this cadence means once per second.
+    if (!module.isScopeReady("page-content", "WorldMap", ["WorldMap.sectors"])) {
+      return;
+    }
+    module.exports.update();
+  }, 1000);
 };
 
 module.exports.fetchNukes = function () {
@@ -180,12 +226,27 @@ module.exports.update = function () {
           nukesByRoom[nuke.room] = nuke;
         });
 
-        console.log(
-          "Map Nukes: shard=" + shard +
-          " zoom=" + worldMap.zoom +
-          " incomingRooms=" + Object.keys(nukesByRoom).length +
-          " (" + Object.keys(nukesByRoom).join(",") + ")",
-        );
+        // update() now runs once a second, so only log when something changed.
+        var logKey =
+          shard + "|" + worldMap.zoom + "|" + Object.keys(nukesByRoom).sort().join(",");
+
+        if (logKey !== module.exports.lastLogKey) {
+          module.exports.lastLogKey = logKey;
+          console.log(
+            "Map Nukes: shard=" + shard +
+            " zoom=" + worldMap.zoom +
+            " incomingRooms=" + Object.keys(nukesByRoom).length +
+            " (" + Object.keys(nukesByRoom).join(",") + ")",
+          );
+        }
+
+        // Each zoom level renders into a different set of containers, so
+        // markers from the previous level would never be pruned by the new
+        // level's per-container sweep.
+        if (module.exports.lastZoom !== worldMap.zoom) {
+          module.exports.lastZoom = worldMap.zoom;
+          $("[id^=nuke-marker-]").remove();
+        }
 
         if (worldMap.zoom == 3) {
           module.exports.renderZoom3(nukesByRoom);
@@ -251,6 +312,7 @@ module.exports.renderZoom2 = function (worldMap, nukesByRoom) {
     var x = 0;
     var y = 0;
     var rooms = sector.rooms.split(",");
+    var wanted = [];
     var wantedIds = {};
 
     for (var i = 0; i < rooms.length; i++) {
@@ -269,29 +331,41 @@ module.exports.renderZoom2 = function (worldMap, nukesByRoom) {
 
       var id = "nuke-marker-" + sector.firstRoomName + "-" + roomName;
       wantedIds[id] = true;
+      wanted.push({
+        id: id,
+        nuke: nukesByRoom[roomName],
+        left: (x + 1) * 50 - 50,
+        top: (y - 1) * 50,
+      });
+    }
 
-      if (!document.getElementById(id)) {
-        var left = (x + 1) * 50 - 50;
-        var top = (y - 1) * 50;
+    // Prune before creating, and prune every nuke marker in this container
+    // regardless of which sector it was made for: the client recycles sector
+    // containers while panning, so a marker left by the sector that used to
+    // live here keeps its old left/top and ends up over an unrelated room.
+    // See the same cleanup in modules/map.alliance.js.
+    canvaElement.siblings("[id^=nuke-marker-]").each(function () {
+      if (!wantedIds[this.id]) {
+        $(this).remove();
+      }
+    });
 
+    for (var j = 0; j < wanted.length; j++) {
+      var item = wanted[j];
+
+      // Scoped to this container, not document-wide: a stale duplicate
+      // elsewhere in the DOM must not block the correctly-placed marker.
+      if (canvaElement.siblings("#" + item.id).length === 0) {
         var markerHtml = module.exports.makeMarkerHtml(
-          id,
-          nukesByRoom[roomName],
+          item.id,
+          item.nuke,
           50,
-          left,
-          top,
+          item.left,
+          item.top,
         );
         canvaElement.after(markerHtml);
       }
     }
-
-    canvaElement
-      .siblings(`[id^=nuke-marker-${sector.firstRoomName}-]`)
-      .each(function () {
-        if (!wantedIds[this.id]) {
-          $(this).remove();
-        }
-      });
   }
 };
 
@@ -329,6 +403,7 @@ module.exports.renderZoom1 = function (worldMap, nukesByRoom) {
     var x = 0;
     var y = 0;
     var rooms = sector.rooms.split(",");
+    var wanted = [];
     var wantedIds = {};
 
     for (var i = 0; i < rooms.length; i++) {
@@ -347,27 +422,35 @@ module.exports.renderZoom1 = function (worldMap, nukesByRoom) {
 
       var id = "nuke-marker-1-" + sector.firstRoomName + "-" + roomName;
       wantedIds[id] = true;
-
-      if (!document.getElementById(id)) {
-        var left = (x + 1) * 20 - 20;
-        var top = (y - 1) * 20;
-
-        var markerHtml = module.exports.makeMarkerHtml(
-          id,
-          nukesByRoom[roomName],
-          20,
-          left,
-          top,
-        );
-        $sectorEle.append(markerHtml);
-      }
+      wanted.push({
+        id: id,
+        nuke: nukesByRoom[roomName],
+        left: (x + 1) * 20 - 20,
+        top: (y - 1) * 20,
+      });
     }
 
-    $sectorEle.find(`[id^=nuke-marker-1-${firstRoomName}-]`).each(function () {
+    // See renderZoom2: prune first, and prune markers from any sector.
+    $sectorEle.find("[id^=nuke-marker-]").each(function () {
       if (!wantedIds[this.id]) {
         $(this).remove();
       }
     });
+
+    for (var j = 0; j < wanted.length; j++) {
+      var item = wanted[j];
+
+      if ($sectorEle.children("#" + item.id).length === 0) {
+        var markerHtml = module.exports.makeMarkerHtml(
+          item.id,
+          item.nuke,
+          20,
+          item.left,
+          item.top,
+        );
+        $sectorEle.append(markerHtml);
+      }
+    }
   }
 };
 

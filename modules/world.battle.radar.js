@@ -9,6 +9,7 @@ module.exports.initSharedCache = function () {
     nukes: null,
     nukesFetchedAt: 0,
     currentTickByShard: {},
+    tickFetchInFlight: {},
   };
 
   window.__scThreatCache.fetchCurrentTick =
@@ -20,9 +21,23 @@ module.exports.initSharedCache = function () {
         return;
       }
 
+      // Callers can tick far faster than the request completes; serve the
+      // stale value rather than piling up duplicate requests.
+      var inFlight = (window.__scThreatCache.tickFetchInFlight =
+        window.__scThreatCache.tickFetchInFlight || {});
+
+      if (inFlight[shard]) {
+        cb(cached ? cached.time : undefined);
+        return;
+      }
+
+      inFlight[shard] = true;
+
       module.ajaxGet(
         "https://screeps.com/api/game/time?shard=" + shard,
         function (data, error) {
+          inFlight[shard] = false;
+
           if (data && data.ok && typeof data.time === "number") {
             window.__scThreatCache.currentTickByShard[shard] = {
               time: data.time,
@@ -34,6 +49,12 @@ module.exports.initSharedCache = function () {
               "Threat Radar: failed to fetch current tick for " + shard,
               error,
             );
+            // Record the attempt so a persistent failure backs off to one
+            // request per cache window instead of one per tick.
+            window.__scThreatCache.currentTickByShard[shard] = {
+              time: cached ? cached.time : undefined,
+              fetchedAt: Date.now(),
+            };
             cb(cached ? cached.time : undefined);
           }
         },
@@ -44,7 +65,11 @@ module.exports.initSharedCache = function () {
     window.__scThreatCache.getTicksRemaining ||
     function (nuke) {
       var cached = window.__scThreatCache.currentTickByShard[nuke.shard];
-      if (!cached || typeof nuke.landTime !== "number") {
+      if (
+        !cached ||
+        typeof cached.time !== "number" ||
+        typeof nuke.landTime !== "number"
+      ) {
         return undefined;
       }
       return nuke.landTime - cached.time;

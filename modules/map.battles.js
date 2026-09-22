@@ -1,5 +1,8 @@
 module.exports.battles = [];
 module.exports.refreshTimer = null;
+module.exports.renderTimer = null;
+module.exports.lastZoom = null;
+module.exports.lastLogKey = null;
 
 module.exports.init = function () {
   module.exports.fetchBattles();
@@ -10,6 +13,23 @@ module.exports.init = function () {
     }
     module.exports.fetchBattles();
   }, 60000);
+
+  // The extension only pushes 'update' on tab navigation, never on map
+  // pan/zoom -- but the client recycles sector containers while panning, so
+  // markers must be re-anchored far more often than the 60s refetch. This
+  // tick is DOM-only (no network) and cheap.
+  module.exports.renderTimer = setInterval(function () {
+    if (window.location.href.indexOf("#!/map") === -1) {
+      return;
+    }
+    // Check the scope synchronously first: update() -> getScopeData would
+    // otherwise poll for ~5s and then console.error every time the map scope
+    // is not populated yet, which at this cadence means once per second.
+    if (!module.isScopeReady("page-content", "WorldMap", ["WorldMap.sectors"])) {
+      return;
+    }
+    module.exports.update();
+  }, 1000);
 };
 
 module.exports.fetchBattles = function () {
@@ -81,12 +101,27 @@ module.exports.update = function () {
         battlesByRoom[battle.room] = battle;
       });
 
-      console.log(
-        "Map Battles: shard=" + shard +
-        " zoom=" + worldMap.zoom +
-        " qualifyingRooms=" + Object.keys(battlesByRoom).length +
-        " (" + Object.keys(battlesByRoom).join(",") + ")",
-      );
+      // update() now runs once a second, so only log when something changed.
+      var logKey =
+        shard + "|" + worldMap.zoom + "|" + Object.keys(battlesByRoom).sort().join(",");
+
+      if (logKey !== module.exports.lastLogKey) {
+        module.exports.lastLogKey = logKey;
+        console.log(
+          "Map Battles: shard=" + shard +
+          " zoom=" + worldMap.zoom +
+          " qualifyingRooms=" + Object.keys(battlesByRoom).length +
+          " (" + Object.keys(battlesByRoom).join(",") + ")",
+        );
+      }
+
+      // Each zoom level renders into a different set of containers, so
+      // markers from the previous level would never be pruned by the new
+      // level's per-container sweep.
+      if (module.exports.lastZoom !== worldMap.zoom) {
+        module.exports.lastZoom = worldMap.zoom;
+        $("[id^=battle-marker-]").remove();
+      }
 
       if (worldMap.zoom == 3) {
         module.exports.renderZoom3(battlesByRoom);
@@ -151,6 +186,7 @@ module.exports.renderZoom2 = function (worldMap, battlesByRoom) {
     var x = 0;
     var y = 0;
     var rooms = sector.rooms.split(",");
+    var wanted = [];
     var wantedIds = {};
 
     for (var i = 0; i < rooms.length; i++) {
@@ -169,29 +205,41 @@ module.exports.renderZoom2 = function (worldMap, battlesByRoom) {
 
       var id = "battle-marker-" + sector.firstRoomName + "-" + roomName;
       wantedIds[id] = true;
+      wanted.push({
+        id: id,
+        battle: battlesByRoom[roomName],
+        left: (x + 1) * 50 - 50,
+        top: (y - 1) * 50,
+      });
+    }
 
-      if (!document.getElementById(id)) {
-        var left = (x + 1) * 50 - 50;
-        var top = (y - 1) * 50;
+    // Prune before creating, and prune every battle marker in this container
+    // regardless of which sector it was made for: the client recycles sector
+    // containers while panning, so a marker left by the sector that used to
+    // live here keeps its old left/top and ends up over an unrelated room.
+    // See the same cleanup in modules/map.alliance.js.
+    canvaElement.siblings("[id^=battle-marker-]").each(function () {
+      if (!wantedIds[this.id]) {
+        $(this).remove();
+      }
+    });
 
+    for (var j = 0; j < wanted.length; j++) {
+      var item = wanted[j];
+
+      // Scoped to this container, not document-wide: a stale duplicate
+      // elsewhere in the DOM must not block the correctly-placed marker.
+      if (canvaElement.siblings("#" + item.id).length === 0) {
         var markerHtml = module.exports.makeMarkerHtml(
-          id,
-          battlesByRoom[roomName],
+          item.id,
+          item.battle,
           50,
-          left,
-          top,
+          item.left,
+          item.top,
         );
         canvaElement.after(markerHtml);
       }
     }
-
-    canvaElement
-      .siblings(`[id^=battle-marker-${sector.firstRoomName}-]`)
-      .each(function () {
-        if (!wantedIds[this.id]) {
-          $(this).remove();
-        }
-      });
   }
 };
 
@@ -229,6 +277,7 @@ module.exports.renderZoom1 = function (worldMap, battlesByRoom) {
     var x = 0;
     var y = 0;
     var rooms = sector.rooms.split(",");
+    var wanted = [];
     var wantedIds = {};
 
     for (var i = 0; i < rooms.length; i++) {
@@ -247,27 +296,35 @@ module.exports.renderZoom1 = function (worldMap, battlesByRoom) {
 
       var id = "battle-marker-1-" + sector.firstRoomName + "-" + roomName;
       wantedIds[id] = true;
-
-      if (!document.getElementById(id)) {
-        var left = (x + 1) * 20 - 20;
-        var top = (y - 1) * 20;
-
-        var markerHtml = module.exports.makeMarkerHtml(
-          id,
-          battlesByRoom[roomName],
-          20,
-          left,
-          top,
-        );
-        $sectorEle.append(markerHtml);
-      }
+      wanted.push({
+        id: id,
+        battle: battlesByRoom[roomName],
+        left: (x + 1) * 20 - 20,
+        top: (y - 1) * 20,
+      });
     }
 
-    $sectorEle.find(`[id^=battle-marker-1-${firstRoomName}-]`).each(function () {
+    // See renderZoom2: prune first, and prune markers from any sector.
+    $sectorEle.find("[id^=battle-marker-]").each(function () {
       if (!wantedIds[this.id]) {
         $(this).remove();
       }
     });
+
+    for (var j = 0; j < wanted.length; j++) {
+      var item = wanted[j];
+
+      if ($sectorEle.children("#" + item.id).length === 0) {
+        var markerHtml = module.exports.makeMarkerHtml(
+          item.id,
+          item.battle,
+          20,
+          item.left,
+          item.top,
+        );
+        $sectorEle.append(markerHtml);
+      }
+    }
   }
 };
 
