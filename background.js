@@ -207,6 +207,29 @@ function executeModule(tabId, info, config, tries = 15, requestUrl){
             queue.push(info.path);
             logToTab(tabId, "injecting " + info.path);
 
+            // "Frame with ID 0 is showing error page" and similar lastErrors from
+            // executeScript are usually a transient race: the tab's onUpdated
+            // "complete" event fires while the main frame is momentarily between
+            // navigations (e.g. a fast SPA hash-route change), and the frame is
+            // injectable again a moment later. Retry with the same backoff used
+            // for the injection-queue-busy race below instead of giving up on the
+            // first failure.
+            var retryOrGiveUp = function(reason){
+                queue = injectQueue[tabId] = queue.filter(item => item !== info.path);
+                if (queue.length === 0){
+                    delete injectQueue[tabId];
+                }
+
+                if (tries > 0){
+                    setTimeout(function(){
+                        executeModule(tabId, info, config, tries - 1, requestUrl);
+                    }, 500);
+                }else{
+                    console.error("Failed to inject " + info.path + ": " + reason);
+                    logToTab(tabId, "failed to inject " + info.path + ": " + reason);
+                }
+            };
+
             chrome.scripting.executeScript({
                 target: {tabId: tabId},
                 func: function(name, config, requestUrl){
@@ -221,17 +244,17 @@ function executeModule(tabId, info, config, tries = 15, requestUrl){
                 },
                 args: [info.path, config === undefined ? null : config, requestUrl === undefined ? null : requestUrl]
             }, function(){
+                if (chrome.runtime.lastError){
+                    retryOrGiveUp(chrome.runtime.lastError.message);
+                    return;
+                }
+
                 chrome.scripting.executeScript({
                     target: {tabId: tabId},
                     files: ["module.js", "content.js", info.path]
                 }, function(){
                     if (chrome.runtime.lastError){
-                        console.error("Failed to inject " + info.path + ": " + chrome.runtime.lastError.message);
-                        logToTab(tabId, "failed to inject " + info.path + ": " + chrome.runtime.lastError.message);
-                        queue = injectQueue[tabId] = queue.filter(item => item !== info.path);
-                        if (queue.length === 0){
-                            delete injectQueue[tabId];
-                        }
+                        retryOrGiveUp(chrome.runtime.lastError.message);
                         return;
                     }
 
