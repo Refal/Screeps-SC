@@ -11,6 +11,11 @@ module.exports.init = function () {
   url = `https://www.leagueofautomatednations.com/map/${shard}/alliances.js`;
 
   module.dispatchEvent({ event: "xhttp", url: url }, function (response) {
+    if (!response.data) {
+      console.error("map.alliance: failed to fetch alliances");
+      return;
+    }
+
     try {
       module.exports.alliances = JSON.parse(response.data);
     } catch (e) {

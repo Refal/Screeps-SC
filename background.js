@@ -115,23 +115,24 @@ chrome.runtime.onMessage.addListener(function(request, sender, callback) {
         }
 
         fetch(request.url, options)
-            .then(function(response) { return response.text(); })
+            .then(function(response) {
+                if (!response.ok){
+                    throw new Error("HTTP " + response.status);
+                }
+                return response.text();
+            })
             .then(function(responseText) {
                 callback(responseText);
             })
             .catch(function(e) {
-                console.error("Error in xhttp: " + e);
+                console.error("Error in xhttp (" + request.url + "): " + e);
                 callback();
             });
 
         return true; // prevents the callback from being called too early on return
     } else if (request.action == "injected"){
-        if (sender.tab && injectQueue[sender.tab.id]){
-            injectQueue[sender.tab.id] = injectQueue[sender.tab.id].filter(item => item !== request.data);
-
-            if (injectQueue[sender.tab.id].length === 0){
-                delete injectQueue[sender.tab.id];
-            }
+        if (sender.tab){
+            releaseInjectLock(sender.tab.id, request.data);
         }
     } else if (request.action == "injectMain"){
         if (!sender.tab || sender.tab.id < 0){
@@ -166,6 +167,35 @@ chrome.runtime.onMessage.addListener(function(request, sender, callback) {
     }
 });
 
+// Per-tab state is otherwise never cleaned up, and pending retries would keep
+// targeting a tab that no longer exists ("No tab with id").
+chrome.tabs.onRemoved.addListener(function(tabId){
+    delete activeTabPorts[tabId];
+    delete injectQueue[tabId];
+});
+
+chrome.tabs.onReplaced.addListener(function(addedTabId, removedTabId){
+    delete activeTabPorts[removedTabId];
+    delete injectQueue[removedTabId];
+});
+
+// The injection lock is normally released by the content script's "injected"
+// ack. If that ack never arrives (page navigated away, content script threw,
+// no onConnect listener) the lock would leak and every later module on the
+// tab would fail with "Failed to inject", so it is also released on port
+// disconnect and after a timeout.
+function releaseInjectLock(tabId, path){
+    if (!injectQueue[tabId]){
+        return;
+    }
+
+    injectQueue[tabId] = injectQueue[tabId].filter(item => item !== path);
+
+    if (injectQueue[tabId].length === 0){
+        delete injectQueue[tabId];
+    }
+}
+
 // Errors and diagnostics from the background worker are invisible unless the
 // service worker console is open, so mirror them into the tab's console.
 function logToTab(tabId, message){
@@ -189,16 +219,12 @@ function getStorageSync(path, cb){
 }
 
 function executeModule(tabId, info, config, tries = 15, requestUrl){
-    if (!activeTabPorts[tabId]){
-        activeTabPorts[tabId] = {}
-    }
+    // Port state is only created once an injection succeeds, so a retry
+    // firing after the tab closed doesn't re-create entries for it.
+    var entry = activeTabPorts[tabId] && activeTabPorts[tabId][info.path];
 
-    if (!activeTabPorts[tabId][info.path]){
-        activeTabPorts[tabId][info.path] = {}
-    }
-
-    if (activeTabPorts[tabId][info.path].port){
-        activeTabPorts[tabId][info.path].port.postMessage({event: 'update', module:info.path, requestUrl: requestUrl});
+    if (entry && entry.port){
+        entry.port.postMessage({event: 'update', module:info.path, requestUrl: requestUrl});
     }else{
 
         var queue = injectQueue[tabId] || (injectQueue[tabId] = []);
@@ -207,17 +233,21 @@ function executeModule(tabId, info, config, tries = 15, requestUrl){
             queue.push(info.path);
             logToTab(tabId, "injecting " + info.path);
 
-            // "Frame with ID 0 is showing error page" and similar lastErrors from
-            // executeScript are usually a transient race: the tab's onUpdated
-            // "complete" event fires while the main frame is momentarily between
-            // navigations (e.g. a fast SPA hash-route change), and the frame is
-            // injectable again a moment later. Retry with the same backoff used
-            // for the injection-queue-busy race below instead of giving up on the
-            // first failure.
+            // Some executeScript lastErrors are a transient race (the frame is
+            // momentarily between navigations) and are retried. Others won't
+            // resolve by waiting: the tab is gone, or the main frame shows
+            // Chrome's network error page, which stays until the tab reloads.
+            // The next onUpdated "complete" after a reload retries those.
             var retryOrGiveUp = function(reason){
-                queue = injectQueue[tabId] = queue.filter(item => item !== info.path);
-                if (queue.length === 0){
-                    delete injectQueue[tabId];
+                releaseInjectLock(tabId, info.path);
+
+                if (/No tab with id/.test(reason)){
+                    delete activeTabPorts[tabId];
+                }
+
+                if (/No tab with id|showing error page/.test(reason)){
+                    console.warn("Skipping " + info.path + ": " + reason);
+                    return;
                 }
 
                 if (tries > 0){
@@ -259,6 +289,9 @@ function executeModule(tabId, info, config, tries = 15, requestUrl){
                     }
 
                     var port = chrome.tabs.connect(tabId, {name: info.path});
+                    var lockTimer = setTimeout(function(){
+                        releaseInjectLock(tabId, info.path);
+                    }, 3000);
 
                     port.onMessage.addListener(function(msg) {
                       console.log('received message from tab ' + tabId + ':');
@@ -267,12 +300,19 @@ function executeModule(tabId, info, config, tries = 15, requestUrl){
 
                     port.onDisconnect.addListener(function(event) {
                       console.log("port disconnected");
-                      delete activeTabPorts[tabId][info.path];
+                      clearTimeout(lockTimer);
+                      releaseInjectLock(tabId, info.path);
+                      if (activeTabPorts[tabId]){
+                          delete activeTabPorts[tabId][info.path];
+                      }
                     });
 
                     port.postMessage({event: 'inject', module:info.path});
 
-                    activeTabPorts[tabId][info.path].port = port;
+                    if (!activeTabPorts[tabId]){
+                        activeTabPorts[tabId] = {};
+                    }
+                    activeTabPorts[tabId][info.path] = {port: port};
                 });
             });
         }else{

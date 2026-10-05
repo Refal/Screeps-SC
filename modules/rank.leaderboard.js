@@ -1,5 +1,10 @@
 module.exports.init = function(){
-    module.dispatchEvent({event: 'xhttp', url:'http://www.leagueofautomatednations.com/alliances.js'}, function(response){
+    module.dispatchEvent({event: 'xhttp', url:'https://www.leagueofautomatednations.com/alliances.js'}, function(response){
+        if (!response.data){
+            console.error("rank.leaderboard: failed to fetch alliances");
+            return;
+        }
+
         module.alliances = JSON.parse(response.data);
 
         module.userToAlliance = {}

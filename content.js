@@ -68,9 +68,14 @@ function eventsSentFromBackground(msg){
 
     switch(msg.event) {
         case 'inject':
-            document.addEventListener("_" + msg.module, eventsSentFromScript);
-            inject(module);
-            chrome.runtime.sendMessage({action:'injected', data:msg.module});
+            // Always ack, even if inject throws, so the background releases
+            // the per-tab injection lock.
+            try {
+                document.addEventListener("_" + msg.module, eventsSentFromScript);
+                inject(module);
+            } finally {
+                chrome.runtime.sendMessage({action:'injected', data:msg.module});
+            }
             break;
         case 'update':
             dispatchEvent(msg.module, JSON.stringify(msg));
