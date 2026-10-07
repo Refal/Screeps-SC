@@ -9,6 +9,17 @@ module.exports.init = function(){
     // fine since each column renders independently.
     module.exports.compressed = ['battery','reductant','oxidant','utrium_bar','lemergium_bar','keanium_bar','zynthium_bar','purifier','ghodium_melt'];
 
+    // Factory commodities, aligned index-for-index by chain (mechanical,
+    // electronical, biological, mystical). The common composite/crystal/
+    // liquid chain trails as a 5th row in levels 1-3.
+    module.exports.commodityRaw = ['metal','silicon','biomass','mist'];
+    module.exports.commodityBasic = ['alloy','wire','cell','condensate'];
+    module.exports.commodityLvl1 = ['tube','switch','phlegm','concentrate','composite'];
+    module.exports.commodityLvl2 = ['fixtures','transistor','tissue','extract','crystal'];
+    module.exports.commodityLvl3 = ['frame','microchip','muscle','spirit','liquid'];
+    module.exports.commodityLvl4 = ['hydraulics','circuit','organoid','emanation'];
+    module.exports.commodityLvl5 = ['machine','device','organism','essence'];
+
     module.getUserId(function(userid){
         module.ajaxGet("https://screeps.com/api/user/rooms?id=" + userid, function(data, error){
             if (data && data.shards){
@@ -63,9 +74,13 @@ module.exports.update = function(){
                       <option value="Storage">Storage</option>
                       <option value="Terminal">Terminal</option>
                     </select>
+                    <select id="sc-set-dropdown" style="border-color: transparent;background: #444;color: #ccc;margin-left:8px;">
+                      <option value="minerals" selected>Minerals</option>
+                      <option value="commodities">Commodities</option>
+                    </select>
                 </div>
                 ${svg}
-                <div id="sc-resource-grid" style="display:grid;grid-template-columns:repeat(5, 1fr);gap:0 12px;align-items:start;"></div>
+                <div id="sc-resource-grid"></div>
             </div>`);
 
             var savedDrop = localStorage.getItem('scMarketDropdown');
@@ -78,25 +93,29 @@ module.exports.update = function(){
                 }
             }
 
-            var columns = [
+            var grid = bodyElement.find('#sc-resource-grid');
+
+            grid.append(module.exports.buildGrid('minerals', [
                 {title: 'Base',       resources: module.exports.base},
                 {title: 'Compressed', resources: module.exports.compressed},
                 {title: 'Tier 1',     resources: module.exports.tier1},
                 {title: 'Tier 2',     resources: module.exports.tier2},
                 {title: 'Tier 3',     resources: module.exports.tier3}
-            ];
+            ]));
 
-            var grid = bodyElement.find('#sc-resource-grid');
+            grid.append(module.exports.buildGrid('commodities', [
+                {title: 'Raw',     resources: module.exports.commodityRaw},
+                {title: 'Basic',   resources: module.exports.commodityBasic},
+                {title: 'Level 1', resources: module.exports.commodityLvl1},
+                {title: 'Level 2', resources: module.exports.commodityLvl2},
+                {title: 'Level 3', resources: module.exports.commodityLvl3},
+                {title: 'Level 4', resources: module.exports.commodityLvl4},
+                {title: 'Level 5', resources: module.exports.commodityLvl5}
+            ]));
 
-            for (let c = 0; c < columns.length; c++){
-                var col = $(`<div><div style="color: #999;">${columns[c].title}: </div></div>`);
-
-                for (let i = 0; i < columns[c].resources.length; i++){
-                    col.append(module.exports.getTabElement(columns[c].resources[i]));
-                }
-
-                grid.append(col);
-            }
+            var savedSet = localStorage.getItem('scMarketResourceSet') === 'commodities' ? 'commodities' : 'minerals';
+            bodyElement.find('#sc-set-dropdown').val(savedSet);
+            module.exports.showSet(grid, savedSet);
 
             // app-market itself is the scroll container (its CSS sets
             // height: calc(100vh - 42px) with overflow-y: auto and lays its
@@ -139,10 +158,17 @@ module.exports.update = function(){
                 if (this.value == "None"){
                     $('#sc-resource-grid').hide();
                 }else{
-                    $('#sc-resource-grid').css('display', 'grid');
+                    $('#sc-resource-grid').show();
                     module.exports.fetchResources();
                 }
                 localStorage.setItem('scMarketDropdown', this.value);
+            });
+
+            // Both sets are filled from the same fetch, so switching only
+            // toggles visibility.
+            $('body').off('change.scMarketResources', '#sc-set-dropdown').on('change.scMarketResources', '#sc-set-dropdown', function () {
+                module.exports.showSet($('#sc-resource-grid'), this.value);
+                localStorage.setItem('scMarketResourceSet', this.value);
             });
 
             // The links are built with the shard resolved at panel-build
@@ -184,8 +210,31 @@ module.exports.teardown = function(){
 
     $(window).off('hashchange.scMarketResources');
     $('body').off('mousedown.scMarketResources', '#sc-my-resources a.market-resource');
+    $('body').off('change.scMarketResources', '#sc-set-dropdown');
     module.exports.closeSocket();
     $('#sc-my-resources').remove();
+}
+
+module.exports.buildGrid = function(setName, columns){
+    var grid = $(`<div class="sc-resource-set" data-set="${setName}" style="display:grid;grid-template-columns:repeat(${columns.length}, 1fr);gap:0 12px;align-items:start;"></div>`);
+
+    for (let c = 0; c < columns.length; c++){
+        var col = $(`<div><div style="color: #999;">${columns[c].title}: </div></div>`);
+
+        for (let i = 0; i < columns[c].resources.length; i++){
+            col.append(module.exports.getTabElement(columns[c].resources[i]));
+        }
+
+        grid.append(col);
+    }
+
+    return grid;
+}
+
+module.exports.showSet = function(container, setName){
+    container.find('.sc-resource-set').each(function(){
+        this.style.display = this.dataset.set === setName ? 'grid' : 'none';
+    });
 }
 
 module.exports.getMarketShard = function(){
