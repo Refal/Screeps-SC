@@ -5,7 +5,7 @@ function inject(obj){
     if (window.__scInjectedModules[obj.name]){
         console.log("injected twice");
 
-        dispatchEvent(obj.name, {event: 'update'});
+        dispatchEvent(obj.name, {event: 'update', requestUrl: obj.requestUrl});
     }else{
         window.__scInjectedModules[obj.name] = true;
 
